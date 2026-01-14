@@ -655,6 +655,16 @@ export default function App() {
                         >
                           <EyeIcon className="w-5 h-5" /> {editorState.isRendered ? 'Preview Master' : 'Review Segments'}
                         </button>
+
+                        {editorState.isRendered && (
+                          <a 
+                            href={editorState.combinedVideoUrl} 
+                            download={`${editorState.youtubeMetadata?.title || 'AppTour'}.mp4`}
+                            className="w-full bg-slate-800 hover:bg-slate-700 py-4 rounded-2xl font-bold text-sm tracking-wide transition flex items-center justify-center gap-2 border border-white/10 active:scale-95 text-white"
+                          >
+                            <ArrowDownTrayIcon className="w-5 h-5" /> Download Master File
+                          </a>
+                        )}
                         
                         <button 
                           disabled={!isDurationValid || !editorState.isRendered}
