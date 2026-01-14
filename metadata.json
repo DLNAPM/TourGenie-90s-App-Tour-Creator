@@ -1,0 +1,8 @@
+{
+  "name": "TourGenie: 90s App Tour Creator",
+  "description": "Generate professional 90-second animated app tour videos from descriptions and screenshots using Gemini and Veo.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
