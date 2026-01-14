@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
 import { TourService } from './services/geminiService';
@@ -28,7 +27,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
-const MIN_DURATION = 60; // 60 seconds minimum
+const MIN_DURATION = 30; // Updated to 30 seconds minimum threshold
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'creator' | 'editor'>('creator');
@@ -58,9 +57,7 @@ export default function App() {
   // Video Editor State
   const [editorState, setEditorState] = useState<EditorState>({
     clips: [],
-    // Fix: Removed 'boolean' type keyword which was incorrectly used as a value
     isProcessing: false,
-    // Fix: Removed 'boolean' type keyword which was incorrectly used as a value
     includeVoiceover: true
   });
 
@@ -72,6 +69,7 @@ export default function App() {
   }, [editorState.clips]);
 
   const isDurationValid = totalDuration >= MIN_DURATION;
+  const secondsRemaining = Math.max(0, Math.ceil(MIN_DURATION - totalDuration));
 
   // Determine if we effectively have an API key available
   const isApiReady = hasKey === true || (process.env.API_KEY && process.env.API_KEY !== 'RENDER_API_KEY_PLACEHOLDER' && process.env.API_KEY !== '');
@@ -139,7 +137,7 @@ export default function App() {
   // --- YouTube Upload Simulation ---
   const handleYouTubePublish = async () => {
     if (!isDurationValid) {
-      setError(`Your tour is too short (${Math.floor(totalDuration)}s). Please add more clips to reach the 60-second requirement.`);
+      setError(`Your tour is too short (${Math.floor(totalDuration)}s). Please add ${secondsRemaining}s more content to reach the 30-second requirement.`);
       return;
     }
     
@@ -363,7 +361,7 @@ export default function App() {
                 <div className="space-y-8">
                   <section>
                     <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Create a New Tour</h2>
-                    <p className="text-slate-500">Transform your app's complexity into a professional 90-second story.</p>
+                    <p className="text-slate-500">Transform your app's complexity into a professional 30-90 second story.</p>
                   </section>
                   <div className="space-y-6">
                     <div>
@@ -441,7 +439,7 @@ export default function App() {
                 <div className="flex items-center gap-3 mt-1">
                   <div className="flex items-center gap-2 text-slate-500 text-sm">
                     <ClockIcon className="w-4 h-4" />
-                    <span>Project Length: <span className={`font-bold ${isDurationValid ? 'text-green-600' : 'text-amber-600'}`}>{Math.floor(totalDuration)}s</span> / 60s</span>
+                    <span>Project Length: <span className={`font-bold ${isDurationValid ? 'text-green-600' : 'text-amber-600'}`}>{Math.floor(totalDuration)}s</span> / {MIN_DURATION}s</span>
                   </div>
                 </div>
               </div>
@@ -453,7 +451,7 @@ export default function App() {
                 </div>
                 <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
                    <div 
-                    className={`h-full transition-all duration-500 ${isDurationValid ? 'bg-green-500' : totalDuration > 30 ? 'bg-amber-400' : 'bg-red-500'}`}
+                    className={`h-full transition-all duration-500 ${isDurationValid ? 'bg-green-500' : totalDuration > (MIN_DURATION / 2) ? 'bg-amber-400' : 'bg-red-500'}`}
                     style={{ width: `${Math.min(100, (totalDuration / MIN_DURATION) * 100)}%` }}
                    />
                 </div>
@@ -485,7 +483,7 @@ export default function App() {
                         Upload Video Clips
                         <input type="file" multiple className="hidden" accept="video/*" onChange={handleEditorVideoUpload} />
                       </label>
-                      <p className="text-slate-400 text-sm">Upload at least 60s of footage for a complete tour.</p>
+                      <p className="text-slate-400 text-sm">Upload at least {MIN_DURATION}s of footage for a complete tour.</p>
                     </div>
                   ) : (
                     <div className="space-y-4">
@@ -535,11 +533,11 @@ export default function App() {
                       </div>
                       
                       {!isDurationValid && (
-                        <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-start gap-3">
+                        <div className="bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-start gap-3 animate-pulse">
                           <ExclamationCircleIcon className="w-5 h-5 text-red-500 flex-shrink-0" />
                           <p className="text-xs text-red-200 leading-relaxed">
-                            <span className="font-bold block">Too Short!</span>
-                            Your tour is only {Math.floor(totalDuration)}s. Add {Math.ceil(MIN_DURATION - totalDuration)}s more content to unlock publishing.
+                            <span className="font-bold block">Need {secondsRemaining}s more content</span>
+                            Add more footage to hit the {MIN_DURATION}s professional standard for YouTube tours.
                           </p>
                         </div>
                       )}
@@ -551,7 +549,7 @@ export default function App() {
                         <button 
                           disabled={!isDurationValid}
                           onClick={handleYouTubePublish}
-                          className={`w-full py-4 rounded-2xl font-bold transition flex items-center justify-center gap-2 shadow-xl ${isDurationValid ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'}`}
+                          className={`w-full py-4 rounded-2xl font-bold transition flex items-center justify-center gap-2 shadow-xl ${isDurationValid ? 'bg-red-600 hover:bg-red-700 text-white active:scale-95' : 'bg-slate-800 text-slate-600 cursor-not-allowed'}`}
                         >
                           <PlayIcon className="w-5 h-5 fill-current" />
                           {isDurationValid ? 'Publish to YouTube' : 'Length Insufficient'}
