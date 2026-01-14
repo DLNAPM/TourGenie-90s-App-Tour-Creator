@@ -38,6 +38,7 @@ export interface EditorClip {
 export interface EditorState {
   clips: EditorClip[];
   isProcessing: boolean;
+  includeVoiceover: boolean;
   combinedVideoUrl?: string;
   youtubeMetadata?: {
     title: string;

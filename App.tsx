@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
 import { TourService } from './services/geminiService';
@@ -17,7 +18,11 @@ import {
   ShareIcon,
   TrashIcon,
   ServerIcon,
-  KeyIcon
+  KeyIcon,
+  SpeakerWaveIcon,
+  SpeakerXMarkIcon,
+  EyeIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
@@ -25,6 +30,7 @@ const tourService = new TourService();
 export default function App() {
   const [activeTab, setActiveTab] = useState<'creator' | 'editor'>('creator');
   const [hasKey, setHasKey] = useState<boolean | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   
   // Tour Creator State
   const [input, setInput] = useState<AppInput>({
@@ -43,7 +49,8 @@ export default function App() {
   // Video Editor State
   const [editorState, setEditorState] = useState<EditorState>({
     clips: [],
-    isProcessing: false
+    isProcessing: false,
+    includeVoiceover: true
   });
 
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +82,10 @@ export default function App() {
     if (msg.includes("Requested entity was not found") || msg.includes("API_KEY")) {
       setError("API Key required. Please connect your key to use AI-powered features.");
       setHasKey(false);
+      return true;
+    }
+    if (msg.includes("500") || msg.includes("INTERNAL")) {
+      setError("Model processing error (500). This clip might be too complex or large for the current preview model. Try a different clip or retry.");
       return true;
     }
     setError(msg || "An unexpected error occurred.");
@@ -165,22 +176,32 @@ export default function App() {
     try {
       for (let i = 0; i < updatedClips.length; i++) {
         const clip = updatedClips[i];
+        if (clip.status === 'ready') continue;
+
         updatedClips[i].status = 'analyzing';
         setEditorState(prev => ({ ...prev, clips: [...updatedClips] }));
         
-        const { analysis, narration } = await tourService.analyzeVideoClip(clip.file);
-        updatedClips[i].analysis = analysis;
-        updatedClips[i].narration = narration;
-        updatedClips[i].status = 'generating-audio';
-        setEditorState(prev => ({ ...prev, clips: [...updatedClips] }));
-
-        const audioBase64 = await tourService.generateNarration(narration);
-        updatedClips[i].audioUrl = audioBase64;
-        updatedClips[i].status = 'ready';
+        try {
+            const { analysis, narration } = await tourService.analyzeVideoClip(clip.file);
+            updatedClips[i].analysis = analysis;
+            updatedClips[i].narration = narration;
+            
+            if (editorState.includeVoiceover) {
+              updatedClips[i].status = 'generating-audio';
+              setEditorState(prev => ({ ...prev, clips: [...updatedClips] }));
+              const audioBase64 = await tourService.generateNarration(narration);
+              updatedClips[i].audioUrl = audioBase64;
+            }
+            
+            updatedClips[i].status = 'ready';
+        } catch (e: any) {
+            updatedClips[i].status = 'idle';
+            throw e; // Rethrow to stop the loop and show error
+        }
         setEditorState(prev => ({ ...prev, clips: [...updatedClips] }));
       }
 
-      const metadata = await tourService.generateYouTubeMetadata(updatedClips);
+      const metadata = await tourService.generateYouTubeMetadata(updatedClips.filter(c => c.status === 'ready'));
       setEditorState(prev => ({ 
         ...prev, 
         isProcessing: false, 
@@ -194,6 +215,10 @@ export default function App() {
 
   const removeClip = (id: string) => {
     setEditorState(prev => ({ ...prev, clips: prev.clips.filter(c => c.id !== id) }));
+  };
+
+  const toggleVoiceover = () => {
+    setEditorState(prev => ({ ...prev, includeVoiceover: !prev.includeVoiceover }));
   };
 
   const renderAccessRequired = () => (
@@ -218,6 +243,8 @@ export default function App() {
       </div>
     </div>
   );
+
+  const allClipsReady = editorState.clips.length > 0 && editorState.clips.every(c => c.status === 'ready');
 
   return (
     <div className="min-h-screen text-slate-900 pb-20 relative">
@@ -259,7 +286,10 @@ export default function App() {
         {error && (
           <div className="mb-8 bg-red-50 border border-red-100 text-red-600 p-4 rounded-2xl flex items-center gap-3 text-sm animate-in slide-in-from-top duration-300">
             <ExclamationCircleIcon className="w-5 h-5 flex-shrink-0" />
-            <span>{error}</span>
+            <div className="flex-1">
+                <p className="font-bold">Error Occurred</p>
+                <p>{error}</p>
+            </div>
             <button onClick={() => setError(null)} className="ml-auto text-xs font-bold uppercase tracking-widest hover:underline">Dismiss</button>
           </div>
         )}
@@ -346,20 +376,29 @@ export default function App() {
         ) : (
           /* ADVANCED VIDEO EDITOR VIEW */
           <div className="animate-in fade-in duration-700 space-y-8">
-            <header className="flex items-center justify-between">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <h2 className="text-3xl font-extrabold text-slate-900">Video Editor</h2>
-                <p className="text-slate-500">Merge multiple clips, add AI narrations, and publish to YouTube.</p>
+                <p className="text-slate-500">Analyze clips, generate narrations, and publish tours.</p>
               </div>
-              {editorState.clips.length > 0 && !editorState.isProcessing && (
+              <div className="flex items-center gap-4">
                 <button 
-                  onClick={processEditorClips}
-                  className={`font-bold py-3 px-8 rounded-2xl flex items-center gap-2 shadow-lg transition ${isApiReady ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
+                  onClick={toggleVoiceover}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition font-semibold text-sm ${editorState.includeVoiceover ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-400'}`}
                 >
-                  <SparklesIcon className="w-5 h-5" />
-                  Analyze & Add Voiceover
+                  {editorState.includeVoiceover ? <SpeakerWaveIcon className="w-5 h-5" /> : <SpeakerXMarkIcon className="w-5 h-5" />}
+                  {editorState.includeVoiceover ? 'Voiceover Enabled' : 'Voiceover Disabled'}
                 </button>
-              )}
+                {editorState.clips.length > 0 && !editorState.isProcessing && (
+                  <button 
+                    onClick={processEditorClips}
+                    className={`font-bold py-3 px-8 rounded-2xl flex items-center gap-2 shadow-lg transition ${isApiReady ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
+                  >
+                    <SparklesIcon className="w-5 h-5" />
+                    Process & Analyze
+                  </button>
+                )}
+              </div>
             </header>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -384,7 +423,7 @@ export default function App() {
                       </div>
                       <div>
                         <h3 className="font-bold text-slate-900">No clips added</h3>
-                        <p className="text-slate-500 text-sm">Upload up to 90 minutes of video footage.</p>
+                        <p className="text-slate-500 text-sm">Upload your video recordings here.</p>
                       </div>
                       <label className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl cursor-pointer transition">
                         Upload Video Clips
@@ -394,29 +433,46 @@ export default function App() {
                   ) : (
                     <div className="space-y-4">
                       {editorState.clips.map((clip, idx) => (
-                        <div key={clip.id} className="group relative bg-slate-50 border border-slate-100 rounded-2xl p-4 flex gap-4 items-start transition hover:border-indigo-200">
-                          <div className="w-40 aspect-video rounded-lg overflow-hidden bg-black flex-shrink-0">
-                            <video src={clip.previewUrl} className="w-full h-full object-contain" />
+                        <div key={clip.id} className="group relative bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col sm:flex-row gap-4 items-start transition hover:border-indigo-200">
+                          <div className="w-full sm:w-48 aspect-video rounded-lg overflow-hidden bg-black flex-shrink-0 relative">
+                            <video src={clip.previewUrl} className="w-full h-full object-contain" controls />
                           </div>
-                          <div className="flex-1 space-y-2">
-                            <div className="flex justify-between">
-                              <span className="text-xs font-bold text-slate-400 uppercase">Segment {idx + 1}</span>
-                              <button onClick={() => removeClip(clip.id)} className="text-slate-300 hover:text-red-500 transition"><TrashIcon className="w-5 h-5" /></button>
+                          <div className="flex-1 w-full space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Clip {idx + 1}</span>
+                              <div className="flex items-center gap-2">
+                                {clip.status === 'ready' && <CheckCircleIcon className="w-5 h-5 text-green-500" />}
+                                <button onClick={() => removeClip(clip.id)} className="text-slate-300 hover:text-red-500 transition"><TrashIcon className="w-5 h-5" /></button>
+                              </div>
                             </div>
+                            
                             {clip.status === 'analyzing' ? (
                               <div className="flex items-center gap-2 text-indigo-600 text-sm font-medium animate-pulse">
-                                <SparklesIcon className="w-4 h-4" /> AI analyzing scene...
+                                <SparklesIcon className="w-4 h-4" /> Analyzing visual content...
                               </div>
                             ) : clip.status === 'generating-audio' ? (
                               <div className="flex items-center gap-2 text-indigo-600 text-sm font-medium animate-pulse">
-                                <MicrophoneIcon className="w-4 h-4" /> Generating voiceover...
+                                <MicrophoneIcon className="w-4 h-4" /> Generating AI voiceover...
                               </div>
                             ) : clip.narration ? (
-                              <div className="bg-white p-3 rounded-xl border border-slate-100">
-                                <p className="text-sm text-slate-700 italic">"{clip.narration}"</p>
+                              <div className="space-y-3">
+                                <div className="bg-white p-3 rounded-xl border border-slate-100">
+                                  <p className="text-sm text-slate-700 leading-relaxed">
+                                    <span className="text-indigo-600 font-bold mr-1">Script:</span>
+                                    {clip.narration}
+                                  </p>
+                                </div>
+                                {clip.audioUrl && (
+                                  <div className="flex items-center gap-3 bg-indigo-50/50 p-2 rounded-xl">
+                                    <audio controls className="h-8 flex-1">
+                                      <source src={`data:audio/mpeg;base64,${clip.audioUrl}`} type="audio/mpeg" />
+                                    </audio>
+                                    <span className="text-[10px] font-bold text-indigo-400 uppercase pr-2">Narration</span>
+                                  </div>
+                                )}
                               </div>
                             ) : (
-                              <p className="text-sm text-slate-400">Waiting for analysis...</p>
+                              <p className="text-sm text-slate-400 italic">Upload complete. Ready for analysis.</p>
                             )}
                           </div>
                         </div>
@@ -447,25 +503,39 @@ export default function App() {
                         </div>
                         <div>
                           <label className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Description</label>
-                          <p className="text-xs text-slate-400 mt-1 line-clamp-4">{editorState.youtubeMetadata.description}</p>
+                          <p className="text-xs text-slate-400 mt-1 line-clamp-6 leading-relaxed">{editorState.youtubeMetadata.description}</p>
                         </div>
                       </div>
-                      <button 
-                        onClick={() => alert("Integrating with YouTube API...")}
-                        className="w-full bg-red-600 hover:bg-red-700 py-4 rounded-2xl font-bold transition flex items-center justify-center gap-2"
-                      >
-                        <PlayIcon className="w-5 h-5 fill-current" />
-                        Publish to YouTube
-                      </button>
+                      
+                      <div className="space-y-3">
+                        <button 
+                          onClick={() => setIsPreviewOpen(true)}
+                          className="w-full bg-white/10 hover:bg-white/20 py-3 rounded-2xl font-bold transition flex items-center justify-center gap-2 border border-white/10"
+                        >
+                          <EyeIcon className="w-5 h-5" />
+                          Preview Entire Tour
+                        </button>
+                        
+                        <div className="h-px bg-white/10 my-2" />
+                        
+                        <p className="text-[10px] text-slate-400 uppercase text-center font-bold tracking-widest">Publishing options</p>
+                        <button 
+                          onClick={() => alert("Connecting to YouTube Studio via OAuth...")}
+                          className="w-full bg-red-600 hover:bg-red-700 py-4 rounded-2xl font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-red-900/20"
+                        >
+                          <PlayIcon className="w-5 h-5 fill-current" />
+                          Publish to YouTube
+                        </button>
+                      </div>
                     </div>
                   ) : editorState.isProcessing ? (
                     <div className="py-12 text-center space-y-4">
                       <div className="w-12 h-12 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin mx-auto" />
-                      <p className="text-slate-400 text-sm">Processing timeline metadata...</p>
+                      <p className="text-slate-400 text-sm">TourGenie is optimizing your metadata...</p>
                     </div>
                   ) : (
                     <div className="py-12 text-center text-slate-500 text-sm italic leading-relaxed">
-                      Upload and arrange your clips to generate professional metadata and narrantions.
+                      Analyze your project clips to unlock the Publish Center and generated metadata.
                     </div>
                   )}
                 </div>
@@ -473,11 +543,17 @@ export default function App() {
                 <div className="bg-white rounded-3xl p-6 border border-slate-200">
                   <h4 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
                     <ScissorsIcon className="w-5 h-5 text-indigo-600" />
-                    Editor Shortcuts
+                    Project Settings
                   </h4>
                   <ul className="text-sm text-slate-500 space-y-3">
-                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Auto-sync voiceover</li>
-                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Cinematic transitions</li>
+                    <li className="flex items-center justify-between">
+                      <span className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Auto-sync narration</span>
+                      <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 rounded">ON</span>
+                    </li>
+                    <li className="flex items-center justify-between">
+                      <span className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Cinematic transitions</span>
+                      <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 rounded">AUTO</span>
+                    </li>
                   </ul>
                 </div>
               </div>
@@ -485,6 +561,56 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* FULL PREVIEW OVERLAY */}
+      {isPreviewOpen && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-6 animate-in fade-in duration-300">
+            <div className="max-w-5xl w-full flex flex-col gap-6">
+                <div className="flex items-center justify-between text-white">
+                    <h2 className="text-2xl font-bold flex items-center gap-3">
+                        <PlayIcon className="w-8 h-8 text-indigo-500 fill-current" />
+                        Tour Preview
+                    </h2>
+                    <button onClick={() => setIsPreviewOpen(false)} className="bg-white/10 hover:bg-white/20 p-2 rounded-full transition">
+                        <XMarkIcon className="w-6 h-6" />
+                    </button>
+                </div>
+                
+                <div className="bg-black rounded-[2.5rem] overflow-hidden shadow-2xl aspect-video border border-white/10 relative group">
+                    <div className="absolute inset-0 flex flex-col overflow-y-auto">
+                        {editorState.clips.map((clip, idx) => (
+                            <div key={clip.id} className="min-h-full flex-shrink-0 relative">
+                                <video 
+                                    src={clip.previewUrl} 
+                                    className="w-full h-full object-contain" 
+                                    controls 
+                                    autoPlay={idx === 0}
+                                />
+                                <div className="absolute top-6 left-6 bg-black/60 backdrop-blur-md border border-white/10 rounded-2xl px-4 py-2 text-white">
+                                    <p className="text-xs font-bold uppercase tracking-widest text-indigo-400">Section {idx+1}</p>
+                                    <p className="text-sm font-medium">{clip.analysis?.substring(0, 50)}...</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {editorState.clips.map((clip, idx) => (
+                        <div key={clip.id} className="bg-white/5 border border-white/10 rounded-2xl p-3 flex gap-3 items-center">
+                            <div className="w-12 h-12 rounded-lg bg-indigo-500 flex items-center justify-center text-white font-bold">{idx + 1}</div>
+                            <div className="overflow-hidden">
+                                <p className="text-xs font-bold text-white truncate">Scene {idx+1}</p>
+                                <p className="text-[10px] text-slate-400 truncate">Duration: Auto</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+                
+                <p className="text-center text-slate-500 text-xs italic">Scroll within the preview to see all segments of your tour.</p>
+            </div>
+        </div>
+      )}
 
       {/* Deployment Status Indicator */}
       <footer className="fixed bottom-4 left-4 z-[60] flex gap-2">

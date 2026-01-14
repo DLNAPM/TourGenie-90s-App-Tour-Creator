@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { AppInput, Scene, EditorClip } from "../types";
 
@@ -109,37 +110,50 @@ export class TourService {
 
   async analyzeVideoClip(file: File): Promise<{ analysis: string; narration: string }> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Check file size - Gemini flash has a limit for base64 inline data
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit for safe base64 transmission
+        throw new Error("Video file too large for direct AI analysis. Please use clips under 10MB.");
+    }
+
     const base64 = await this.fileToBase64(file);
     
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              data: base64,
-              mimeType: file.type
+    try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  data: base64,
+                  mimeType: file.type
+                }
+              },
+              {
+                text: "Analyze this video clip. Provide a brief 1-sentence description of what's happening and write a professional 10-second narration script for it. Return as JSON."
+              }
+            ]
+          },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                analysis: { type: Type.STRING },
+                narration: { type: Type.STRING }
+              },
+              required: ["analysis", "narration"]
             }
-          },
-          {
-            text: "Analyze this video clip. Provide a brief 1-sentence description of what's happening and write a professional 10-15 second narration script for it that explains the UI action shown."
           }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            analysis: { type: Type.STRING },
-            narration: { type: Type.STRING }
-          },
-          required: ["analysis", "narration"]
-        }
-      }
-    });
+        });
 
-    return JSON.parse(response.text || "{}");
+        return JSON.parse(response.text || "{}");
+    } catch (e: any) {
+        if (e.message?.includes('500') || e.message?.includes('INTERNAL')) {
+            throw new Error("The AI model encountered a temporary internal error while processing this video. This often happens with certain video encodings. Please try a different or shorter clip.");
+        }
+        throw e;
+    }
   }
 
   async generateYouTubeMetadata(clips: EditorClip[]): Promise<{ title: string; description: string; tags: string[] }> {
