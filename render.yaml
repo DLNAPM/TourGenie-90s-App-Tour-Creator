@@ -3,6 +3,7 @@ services:
     name: tourgenie-app
     runtime: static
     staticPublishPath: ./
+    buildCommand: "sed -i 's|RENDER_API_KEY_PLACEHOLDER|'\"$API_KEY\"'|g' index.html"
     envVars:
       - key: API_KEY
         placeholder: "Enter your Google Gemini API Key"

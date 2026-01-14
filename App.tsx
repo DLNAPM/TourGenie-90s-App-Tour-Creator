@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
 import { TourService } from './services/geminiService';
@@ -49,6 +48,9 @@ export default function App() {
 
   const [error, setError] = useState<string | null>(null);
 
+  // Determine if we effectively have an API key available
+  const isApiReady = hasKey === true || (process.env.API_KEY && process.env.API_KEY !== 'RENDER_API_KEY_PLACEHOLDER');
+
   useEffect(() => {
     checkKeyStatus();
   }, []);
@@ -65,12 +67,13 @@ export default function App() {
   const handleKeySelection = async () => {
     await (window as any).aistudio.openSelectKey();
     setHasKey(true); 
+    setError(null);
   };
 
   const handleGlobalError = async (e: any) => {
     const msg = e.message || "";
-    if (msg.includes("Requested entity was not found")) {
-      setError("Session expired or API key required. Please connect your API key to use advanced features.");
+    if (msg.includes("Requested entity was not found") || msg.includes("API_KEY")) {
+      setError("API Key required. Please connect your key to use AI-powered features.");
       setHasKey(false);
       return true;
     }
@@ -95,6 +98,10 @@ export default function App() {
   };
 
   const startGeneration = async () => {
+    if (!isApiReady) {
+      await handleKeySelection();
+      return;
+    }
     if (!input.name || !input.description) {
       setError("Please provide at least a name and description.");
       return;
@@ -146,6 +153,10 @@ export default function App() {
   };
 
   const processEditorClips = async () => {
+    if (!isApiReady) {
+      setError("AI analysis requires an API Key. Please connect your key in the header.");
+      return;
+    }
     if (editorState.clips.length === 0) return;
     setEditorState(prev => ({ ...prev, isProcessing: true }));
     setError(null);
@@ -176,7 +187,7 @@ export default function App() {
         youtubeMetadata: metadata 
       }));
     } catch (e: any) {
-      const handled = await handleGlobalError(e);
+      await handleGlobalError(e);
       setEditorState(prev => ({ ...prev, isProcessing: false }));
     }
   };
@@ -236,18 +247,26 @@ export default function App() {
         <div className="hidden md:flex items-center gap-4">
           <button 
             onClick={handleKeySelection}
-            className={`flex items-center gap-2 text-xs font-bold py-2 px-4 rounded-full border transition ${hasKey ? 'bg-green-50 border-green-200 text-green-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+            className={`flex items-center gap-2 text-xs font-bold py-2 px-4 rounded-full border transition ${isApiReady ? 'bg-green-50 border-green-200 text-green-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
           >
-            <div className={`w-2 h-2 rounded-full ${hasKey ? 'bg-green-500' : 'bg-slate-300'}`} />
-            {hasKey ? 'API Connected' : 'Connect Key'}
+            <div className={`w-2 h-2 rounded-full ${isApiReady ? 'bg-green-500' : 'bg-slate-300'}`} />
+            {isApiReady ? 'API Connected' : 'Connect Key'}
           </button>
         </div>
       </nav>
 
       <main className="max-w-6xl mx-auto mt-12 px-6">
+        {error && (
+          <div className="mb-8 bg-red-50 border border-red-100 text-red-600 p-4 rounded-2xl flex items-center gap-3 text-sm animate-in slide-in-from-top duration-300">
+            <ExclamationCircleIcon className="w-5 h-5 flex-shrink-0" />
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="ml-auto text-xs font-bold uppercase tracking-widest hover:underline">Dismiss</button>
+          </div>
+        )}
+
         {activeTab === 'creator' ? (
           /* TOUR CREATOR VIEW */
-          hasKey === false ? (
+          !isApiReady ? (
             renderAccessRequired()
           ) : (
             state.step === 'input' ? (
@@ -270,7 +289,6 @@ export default function App() {
                       <label className="block text-sm font-semibold mb-2">Tour Script / Key Features</label>
                       <textarea rows={4} placeholder="Paste your script here." className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.script} onChange={e => setInput({...input, script: e.target.value})} />
                     </div>
-                    {error && <div className="bg-red-50 text-red-600 p-4 rounded-xl flex items-center gap-3 text-sm"><ExclamationCircleIcon className="w-5 h-5" />{error}</div>}
                     <button onClick={startGeneration} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group">
                       Generate Storyboard & Video <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </button>
@@ -336,7 +354,7 @@ export default function App() {
               {editorState.clips.length > 0 && !editorState.isProcessing && (
                 <button 
                   onClick={processEditorClips}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-2xl flex items-center gap-2 shadow-lg transition"
+                  className={`font-bold py-3 px-8 rounded-2xl flex items-center gap-2 shadow-lg transition ${isApiReady ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
                 >
                   <SparklesIcon className="w-5 h-5" />
                   Analyze & Add Voiceover
@@ -347,6 +365,17 @@ export default function App() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* Timeline / Clips Area */}
               <div className="lg:col-span-2 space-y-6">
+                {!isApiReady && editorState.clips.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl flex items-center gap-4">
+                    <KeyIcon className="w-6 h-6 text-amber-500" />
+                    <div className="flex-1">
+                      <p className="text-sm font-bold text-amber-900">AI Features Disabled</p>
+                      <p className="text-xs text-amber-700">Connect an API Key to analyze these clips and generate narration.</p>
+                    </div>
+                    <button onClick={handleKeySelection} className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4 py-2 rounded-lg transition">Connect</button>
+                  </div>
+                )}
+
                 <div className="bg-white rounded-3xl border border-slate-200 p-8 min-h-[400px]">
                   {editorState.clips.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4">
@@ -387,7 +416,7 @@ export default function App() {
                                 <p className="text-sm text-slate-700 italic">"{clip.narration}"</p>
                               </div>
                             ) : (
-                              <p className="text-sm text-slate-400">Waiting for AI analysis...</p>
+                              <p className="text-sm text-slate-400">Waiting for analysis...</p>
                             )}
                           </div>
                         </div>
@@ -420,17 +449,9 @@ export default function App() {
                           <label className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Description</label>
                           <p className="text-xs text-slate-400 mt-1 line-clamp-4">{editorState.youtubeMetadata.description}</p>
                         </div>
-                        <div>
-                          <label className="text-xs font-bold text-indigo-400 uppercase tracking-widest">Tags</label>
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {editorState.youtubeMetadata.tags.map(t => (
-                              <span key={t} className="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/30">#{t}</span>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                       <button 
-                        onClick={() => alert("Integrating with YouTube API... Preparing upload payload.")}
+                        onClick={() => alert("Integrating with YouTube API...")}
                         className="w-full bg-red-600 hover:bg-red-700 py-4 rounded-2xl font-bold transition flex items-center justify-center gap-2"
                       >
                         <PlayIcon className="w-5 h-5 fill-current" />
@@ -443,8 +464,8 @@ export default function App() {
                       <p className="text-slate-400 text-sm">Processing timeline metadata...</p>
                     </div>
                   ) : (
-                    <div className="py-12 text-center text-slate-500 text-sm italic">
-                      Finalize your clips to generate YouTube metadata and a professional stitched preview.
+                    <div className="py-12 text-center text-slate-500 text-sm italic leading-relaxed">
+                      Upload and arrange your clips to generate professional metadata and narrantions.
                     </div>
                   )}
                 </div>
@@ -455,9 +476,8 @@ export default function App() {
                     Editor Shortcuts
                   </h4>
                   <ul className="text-sm text-slate-500 space-y-3">
-                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Auto-sync voiceover to action</li>
-                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Cinematic cross-fades</li>
-                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Dynamic background score</li>
+                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Auto-sync voiceover</li>
+                    <li className="flex items-center gap-3"><div className="w-1.5 h-1.5 bg-indigo-600 rounded-full" /> Cinematic transitions</li>
                   </ul>
                 </div>
               </div>
@@ -470,7 +490,7 @@ export default function App() {
       <footer className="fixed bottom-4 left-4 z-[60] flex gap-2">
         <div className="glass px-3 py-1.5 rounded-full border border-slate-200 flex items-center gap-2 shadow-sm text-[10px] font-bold uppercase tracking-wider text-slate-500">
           <ServerIcon className="w-3 h-3 text-green-500" />
-          Env: Active
+          Env: {isApiReady ? 'Secure/Active' : 'Missing API Key'}
         </div>
       </footer>
     </div>
