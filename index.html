@@ -21,19 +21,27 @@
             animation: gradient 15s ease infinite;
         }
     </style>
-<script type="importmap">
+    <script>
+      // Shim process.env for browser compatibility
+      window.process = window.process || { env: { NODE_ENV: 'production' } };
+    </script>
+    <script type="importmap">
 {
   "imports": {
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@heroicons/react/": "https://esm.sh/@heroicons/react@^2.2.0/",
-    "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
-    "@google/genai": "https://esm.sh/@google/genai@^1.35.0"
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@heroicons/react/24/outline": "https://esm.sh/@heroicons/react@2.0.18/24/outline",
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "@heroicons/react/": "https://esm.sh/@heroicons/react@^2.2.0/"
   }
 }
 </script>
 </head>
 <body class="bg-slate-50 min-h-screen">
     <div id="root"></div>
+    <!-- Explicitly load the entry point module -->
+    <script type="module" src="./index.tsx"></script>
 </body>
 </html>
