@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
 import { TourService } from './services/geminiService';
@@ -16,11 +15,9 @@ import {
   ScissorsIcon,
   MicrophoneIcon,
   ShareIcon,
-  TrashIcon
+  TrashIcon,
+  ServerIcon
 } from '@heroicons/react/24/outline';
-
-// Removed local AIStudio interface and declare global to avoid conflict with pre-configured environment types.
-// We will use (window as any).aistudio to access the pre-configured methods as they are guaranteed to exist.
 
 const tourService = new TourService();
 
@@ -56,7 +53,6 @@ export default function App() {
 
   const checkKeyStatus = async () => {
     try {
-      // Use any to bypass type check for window.aistudio which is pre-configured in the environment.
       const selected = await (window as any).aistudio.hasSelectedApiKey();
       setHasKey(selected);
     } catch (e) {
@@ -65,16 +61,25 @@ export default function App() {
   };
 
   const handleKeySelection = async () => {
-    // Triggers the API key selection dialog.
     await (window as any).aistudio.openSelectKey();
     setHasKey(true); 
+  };
+
+  const handleGlobalError = async (e: any) => {
+    const msg = e.message || "";
+    if (msg.includes("Requested entity was not found")) {
+      setError("Session expired. Please re-select your API key to continue.");
+      await handleKeySelection();
+      return true;
+    }
+    setError(msg || "An unexpected error occurred.");
+    return false;
   };
 
   // --- Tour Creator Logic ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    // Explicitly casting to FileList and typing the callback parameter as File to resolve 'unknown' type errors.
     Array.from(files as FileList).forEach((file: File) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -111,18 +116,15 @@ export default function App() {
           updatedScenes[i].audioUrl = audioBase64;
           updatedScenes[i].status = 'completed';
         } catch (e: any) {
+          const handled = await handleGlobalError(e);
+          if (handled) return;
           updatedScenes[i].status = 'failed';
-          if (e.message?.includes("Requested entity was not found")) {
-            setHasKey(false);
-            setError("Session expired or key invalid. Please re-select your key.");
-            return;
-          }
         }
         setState(prev => ({ ...prev, scenes: [...updatedScenes] }));
       }
       setState(prev => ({ ...prev, step: 'final', progress: 100 }));
     } catch (e: any) {
-      setError(e.message || "An unexpected error occurred.");
+      await handleGlobalError(e);
       setState(prev => ({ ...prev, step: 'input' }));
     }
   };
@@ -131,7 +133,6 @@ export default function App() {
   const handleEditorVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    // Explicitly casting to FileList and typing map parameter as File to ensure compatibility with EditorClip interface.
     const newClips: EditorClip[] = Array.from(files as FileList).map((file: File) => ({
       id: Math.random().toString(36).substr(2, 9),
       file,
@@ -173,7 +174,7 @@ export default function App() {
         youtubeMetadata: metadata 
       }));
     } catch (e: any) {
-      setError(e.message);
+      await handleGlobalError(e);
       setEditorState(prev => ({ ...prev, isProcessing: false }));
     }
   };
@@ -197,7 +198,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen text-slate-900 pb-20">
+    <div className="min-h-screen text-slate-900 pb-20 relative">
       <nav className="sticky top-0 z-50 glass border-b border-slate-200/50 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white">
@@ -443,6 +444,14 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Deployment Status Indicator */}
+      <footer className="fixed bottom-4 left-4 z-[60]">
+        <div className="glass px-3 py-1.5 rounded-full border border-slate-200 flex items-center gap-2 shadow-sm text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <ServerIcon className="w-3 h-3 text-green-500" />
+          Production Environment: Render (process.env.API_KEY active)
+        </div>
+      </footer>
     </div>
   );
 }

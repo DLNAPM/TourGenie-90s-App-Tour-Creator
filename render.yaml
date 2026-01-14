@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: tourgenie-app
+    runtime: static
+    staticPublishPath: ./
+    envVars:
+      - key: API_KEY
+        placeholder: "Enter your Google Gemini API Key"
+        description: "Required for Gemini 3 and Veo video generation models."

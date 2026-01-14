@@ -1,14 +1,14 @@
-
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { AppInput, Scene, EditorClip } from "../types";
 
 export class TourService {
-  private getAI() {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
-  }
+  /**
+   * Note: As per SDK guidelines, we instantiate GoogleGenAI immediately before each call 
+   * to ensure it uses the most current process.env.API_KEY injected by the environment.
+   */
 
   async createStoryboards(input: AppInput): Promise<Scene[]> {
-    const ai = this.getAI();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const prompt = `
       Act as a world-class video director. Create a 5-scene storyboard for a 90-second app tour video.
       App Name: ${input.name}
@@ -55,7 +55,7 @@ export class TourService {
   }
 
   async generateSceneVideo(scene: Scene, screenshot?: string): Promise<string> {
-    const ai = this.getAI();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const config: any = {
       numberOfVideos: 1,
       resolution: '720p',
@@ -88,7 +88,7 @@ export class TourService {
   }
 
   async generateNarration(text: string): Promise<string> {
-    const ai = this.getAI();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
       contents: [{ parts: [{ text: `Say clearly and professionally: ${text}` }] }],
@@ -108,7 +108,7 @@ export class TourService {
   }
 
   async analyzeVideoClip(file: File): Promise<{ analysis: string; narration: string }> {
-    const ai = this.getAI();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const base64 = await this.fileToBase64(file);
     
     const response = await ai.models.generateContent({
@@ -143,7 +143,7 @@ export class TourService {
   }
 
   async generateYouTubeMetadata(clips: EditorClip[]): Promise<{ title: string; description: string; tags: string[] }> {
-    const ai = this.getAI();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const summary = clips.map(c => c.analysis).join(". ");
     
     const response = await ai.models.generateContent({
@@ -173,14 +173,5 @@ export class TourService {
       reader.onload = () => resolve((reader.result as string).split(',')[1]);
       reader.onerror = error => reject(error);
     });
-  }
-
-  private decodeBase64(base64: string): Uint8Array {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
   }
 }
