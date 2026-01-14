@@ -56,7 +56,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   // Determine if we effectively have an API key available
-  const isApiReady = hasKey === true || (process.env.API_KEY && process.env.API_KEY !== 'RENDER_API_KEY_PLACEHOLDER');
+  const isApiReady = hasKey === true || (process.env.API_KEY && process.env.API_KEY !== 'RENDER_API_KEY_PLACEHOLDER' && process.env.API_KEY !== '');
 
   useEffect(() => {
     checkKeyStatus();
@@ -64,28 +64,44 @@ export default function App() {
 
   const checkKeyStatus = async () => {
     try {
-      const selected = await (window as any).aistudio.hasSelectedApiKey();
-      setHasKey(selected);
+      if ((window as any).aistudio && typeof (window as any).aistudio.hasSelectedApiKey === 'function') {
+        const selected = await (window as any).aistudio.hasSelectedApiKey();
+        setHasKey(selected);
+      } else {
+        // Not in AI Studio environment, rely on process.env.API_KEY if present
+        setHasKey(false);
+      }
     } catch (e) {
       setHasKey(false);
     }
   };
 
   const handleKeySelection = async () => {
-    await (window as any).aistudio.openSelectKey();
-    setHasKey(true); 
-    setError(null);
+    if ((window as any).aistudio && typeof (window as any).aistudio.openSelectKey === 'function') {
+      try {
+        await (window as any).aistudio.openSelectKey();
+        // Race condition mitigation: assume success after triggering
+        setHasKey(true); 
+        setError(null);
+      } catch (e) {
+        console.error("Failed to open key selection", e);
+      }
+    } else {
+      setError("API Key selection is only available in the AI Studio environment. Please ensure you have set the API_KEY environment variable if deploying manually.");
+    }
   };
 
   const handleGlobalError = async (e: any) => {
     const msg = e.message || "";
-    if (msg.includes("Requested entity was not found") || msg.includes("API_KEY")) {
-      setError("API Key required. Please connect your key to use AI-powered features.");
+    // Check if the request fails with an error message containing "Requested entity was not found." or internal error
+    if (msg.includes("Requested entity was not found") || msg.includes("API_KEY") || msg.includes("401") || msg.includes("403")) {
+      setError("API Key invalid or missing. Please check your credentials.");
       setHasKey(false);
       return true;
     }
-    if (msg.includes("500") || msg.includes("INTERNAL")) {
-      setError("Model processing error (500). This clip might be too complex or large for the current preview model. Try a different clip or retry.");
+    if (msg.includes("500") || msg.includes("INTERNAL") || msg.includes("internal error")) {
+      setError("The AI model encountered an internal error (500). Resetting session key state. Please try selecting your key again.");
+      setHasKey(false); // Reset key selection state on 500 error to prompt re-selection
       return true;
     }
     setError(msg || "An unexpected error occurred.");
@@ -237,14 +253,13 @@ export default function App() {
         >
           Connect API Key <SparklesIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
         </button>
-        <p className="mt-6 text-[10px] text-slate-400 uppercase tracking-widest">
-          Paid Google Cloud project required
+        <p className="mt-6 text-[10px] text-slate-400 uppercase tracking-widest leading-relaxed">
+          Paid Google Cloud project required.<br/>
+          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-600 transition">Billing Documentation</a>
         </p>
       </div>
     </div>
   );
-
-  const allClipsReady = editorState.clips.length > 0 && editorState.clips.every(c => c.status === 'ready');
 
   return (
     <div className="min-h-screen text-slate-900 pb-20 relative">
@@ -287,7 +302,7 @@ export default function App() {
           <div className="mb-8 bg-red-50 border border-red-100 text-red-600 p-4 rounded-2xl flex items-center gap-3 text-sm animate-in slide-in-from-top duration-300">
             <ExclamationCircleIcon className="w-5 h-5 flex-shrink-0" />
             <div className="flex-1">
-                <p className="font-bold">Error Occurred</p>
+                <p className="font-bold">System Alert</p>
                 <p>{error}</p>
             </div>
             <button onClick={() => setError(null)} className="ml-auto text-xs font-bold uppercase tracking-widest hover:underline">Dismiss</button>
