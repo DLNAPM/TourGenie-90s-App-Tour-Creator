@@ -17,7 +17,8 @@ import {
   MicrophoneIcon,
   ShareIcon,
   TrashIcon,
-  ServerIcon
+  ServerIcon,
+  KeyIcon
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
@@ -69,8 +70,8 @@ export default function App() {
   const handleGlobalError = async (e: any) => {
     const msg = e.message || "";
     if (msg.includes("Requested entity was not found")) {
-      setError("Session expired. Please re-select your API key to continue.");
-      await handleKeySelection();
+      setError("Session expired or API key required. Please connect your API key to use advanced features.");
+      setHasKey(false);
       return true;
     }
     setError(msg || "An unexpected error occurred.");
@@ -175,7 +176,7 @@ export default function App() {
         youtubeMetadata: metadata 
       }));
     } catch (e: any) {
-      await handleGlobalError(e);
+      const handled = await handleGlobalError(e);
       setEditorState(prev => ({ ...prev, isProcessing: false }));
     }
   };
@@ -184,19 +185,28 @@ export default function App() {
     setEditorState(prev => ({ ...prev, clips: prev.clips.filter(c => c.id !== id) }));
   };
 
-  if (hasKey === false) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
-        <div className="max-w-md w-full glass p-8 rounded-3xl shadow-2xl text-center">
-          <ExclamationCircleIcon className="w-16 h-16 text-indigo-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-slate-900 mb-2">Access Required</h1>
-          <p className="text-slate-600 mb-6">To generate high-quality videos with Veo, you must select your own Google Cloud API Key with billing enabled.</p>
-          <button onClick={handleKeySelection} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-lg shadow-indigo-200">Connect API Key</button>
-          <p className="mt-4 text-xs text-slate-400">Visit <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="underline">ai.google.dev/gemini-api/docs/billing</a> for help.</p>
+  const renderAccessRequired = () => (
+    <div className="py-20 animate-in fade-in zoom-in duration-500">
+      <div className="max-w-md mx-auto glass p-10 rounded-[2.5rem] shadow-2xl border border-slate-200/50 text-center">
+        <div className="w-20 h-20 bg-indigo-50 rounded-3xl flex items-center justify-center mx-auto mb-6">
+          <KeyIcon className="w-10 h-10 text-indigo-500" />
         </div>
+        <h2 className="text-2xl font-bold text-slate-900 mb-3">API Key Required</h2>
+        <p className="text-slate-500 mb-8 leading-relaxed text-sm">
+          Tour Creator uses high-end **Veo Video Models** and Gemini Pro which require a connected API Key for processing.
+        </p>
+        <button 
+          onClick={handleKeySelection} 
+          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-2xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group"
+        >
+          Connect API Key <SparklesIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+        </button>
+        <p className="mt-6 text-[10px] text-slate-400 uppercase tracking-widest">
+          Paid Google Cloud project required
+        </p>
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
     <div className="min-h-screen text-slate-900 pb-20 relative">
@@ -223,87 +233,97 @@ export default function App() {
           </button>
         </div>
 
-        <div className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-          <a href="#" className="hover:text-indigo-600 transition">History</a>
+        <div className="hidden md:flex items-center gap-4">
+          <button 
+            onClick={handleKeySelection}
+            className={`flex items-center gap-2 text-xs font-bold py-2 px-4 rounded-full border transition ${hasKey ? 'bg-green-50 border-green-200 text-green-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+          >
+            <div className={`w-2 h-2 rounded-full ${hasKey ? 'bg-green-500' : 'bg-slate-300'}`} />
+            {hasKey ? 'API Connected' : 'Connect Key'}
+          </button>
         </div>
       </nav>
 
       <main className="max-w-6xl mx-auto mt-12 px-6">
         {activeTab === 'creator' ? (
           /* TOUR CREATOR VIEW */
-          state.step === 'input' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 animate-in fade-in duration-700">
-              <div className="space-y-8">
-                <section>
-                  <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Create a New Tour</h2>
-                  <p className="text-slate-500">Transform your app's complexity into a professional 90-second story.</p>
-                </section>
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">App Name</label>
-                    <input type="text" placeholder="e.g. FitTrack Pro" className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.name} onChange={e => setInput({...input, name: e.target.value})} />
+          hasKey === false ? (
+            renderAccessRequired()
+          ) : (
+            state.step === 'input' ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 animate-in fade-in duration-700">
+                <div className="space-y-8">
+                  <section>
+                    <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Create a New Tour</h2>
+                    <p className="text-slate-500">Transform your app's complexity into a professional 90-second story.</p>
+                  </section>
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-semibold mb-2">App Name</label>
+                      <input type="text" placeholder="e.g. FitTrack Pro" className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.name} onChange={e => setInput({...input, name: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold mb-2">App Description</label>
+                      <textarea rows={4} placeholder="What does your app do?" className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.description} onChange={e => setInput({...input, description: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold mb-2">Tour Script / Key Features</label>
+                      <textarea rows={4} placeholder="Paste your script here." className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.script} onChange={e => setInput({...input, script: e.target.value})} />
+                    </div>
+                    {error && <div className="bg-red-50 text-red-600 p-4 rounded-xl flex items-center gap-3 text-sm"><ExclamationCircleIcon className="w-5 h-5" />{error}</div>}
+                    <button onClick={startGeneration} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group">
+                      Generate Storyboard & Video <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                    </button>
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">App Description</label>
-                    <textarea rows={4} placeholder="What does your app do?" className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.description} onChange={e => setInput({...input, description: e.target.value})} />
+                </div>
+                <div className="lg:mt-16">
+                  <div className="bg-white border-2 border-dashed border-slate-200 rounded-3xl p-10 text-center hover:border-indigo-400 transition cursor-pointer group relative">
+                    <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleFileUpload} accept="image/*" />
+                    <CloudArrowUpIcon className="w-12 h-12 text-indigo-500 mx-auto mb-4" />
+                    <h3 className="text-lg font-bold text-slate-900">Upload Screenshots</h3>
+                    <p className="text-slate-500 text-sm">Reference images for AI animation.</p>
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Tour Script / Key Features</label>
-                    <textarea rows={4} placeholder="Paste your script here." className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.script} onChange={e => setInput({...input, script: e.target.value})} />
-                  </div>
-                  {error && <div className="bg-red-50 text-red-600 p-4 rounded-xl flex items-center gap-3 text-sm"><ExclamationCircleIcon className="w-5 h-5" />{error}</div>}
-                  <button onClick={startGeneration} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group">
-                    Generate Storyboard & Video <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                  </button>
+                  {input.screenshots.length > 0 && (
+                    <div className="mt-8 grid grid-cols-3 gap-4">
+                      {input.screenshots.map((src, i) => (
+                        <div key={i} className="relative aspect-video rounded-xl overflow-hidden border border-slate-200 group">
+                          <img src={src} className="w-full h-full object-cover" alt="ref" />
+                          <button onClick={() => setInput(prev => ({ ...prev, screenshots: prev.screenshots.filter((_, idx) => idx !== i)}))} className="absolute top-1 right-1 bg-white/80 rounded-full p-1 opacity-0 group-hover:opacity-100 transition"><PlusIcon className="w-4 h-4 rotate-45" /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="lg:mt-16">
-                <div className="bg-white border-2 border-dashed border-slate-200 rounded-3xl p-10 text-center hover:border-indigo-400 transition cursor-pointer group relative">
-                  <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleFileUpload} accept="image/*" />
-                  <CloudArrowUpIcon className="w-12 h-12 text-indigo-500 mx-auto mb-4" />
-                  <h3 className="text-lg font-bold text-slate-900">Upload Screenshots</h3>
-                  <p className="text-slate-500 text-sm">Reference images for AI animation.</p>
+            ) : state.step === 'final' ? (
+              <div className="space-y-12 animate-in slide-in-from-bottom duration-700">
+                <div className="text-center">
+                  <h2 className="text-4xl font-black text-slate-900 mb-2">Your Tour is Ready!</h2>
+                  <p className="text-slate-500">Download scenes and voiceovers to create your final helper video.</p>
                 </div>
-                {input.screenshots.length > 0 && (
-                  <div className="mt-8 grid grid-cols-3 gap-4">
-                    {input.screenshots.map((src, i) => (
-                      <div key={i} className="relative aspect-video rounded-xl overflow-hidden border border-slate-200 group">
-                        <img src={src} className="w-full h-full object-cover" alt="ref" />
-                        <button onClick={() => setInput(prev => ({ ...prev, screenshots: prev.screenshots.filter((_, idx) => idx !== i)}))} className="absolute top-1 right-1 bg-white/80 rounded-full p-1 opacity-0 group-hover:opacity-100 transition"><PlusIcon className="w-4 h-4 rotate-45" /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : state.step === 'final' ? (
-            <div className="space-y-12 animate-in slide-in-from-bottom duration-700">
-              <div className="text-center">
-                <h2 className="text-4xl font-black text-slate-900 mb-2">Your Tour is Ready!</h2>
-                <p className="text-slate-500">Download scenes and voiceovers to create your final helper video.</p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {state.scenes.map((scene, idx) => (
-                  <div key={scene.id} className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-                    <video src={scene.videoUrl} className="w-full aspect-video object-cover" controls />
-                    <div className="p-6">
-                      <p className="text-xs font-bold text-indigo-600 uppercase mb-2">Scene {idx + 1}</p>
-                      <p className="text-slate-600 text-sm mb-4 line-clamp-3">"{scene.narration}"</p>
-                      <div className="flex gap-2">
-                        <a href={scene.videoUrl} download={`scene-${idx+1}.mp4`} className="flex-1 bg-slate-900 text-white text-xs font-bold py-2 rounded-lg text-center">Video</a>
-                        <button onClick={() => alert("Audio download ready!")} className="flex-1 border border-slate-200 text-xs font-bold py-2 rounded-lg text-center">Audio</button>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {state.scenes.map((scene, idx) => (
+                    <div key={scene.id} className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+                      <video src={scene.videoUrl} className="w-full aspect-video object-cover" controls />
+                      <div className="p-6">
+                        <p className="text-xs font-bold text-indigo-600 uppercase mb-2">Scene {idx + 1}</p>
+                        <p className="text-slate-600 text-sm mb-4 line-clamp-3">"{scene.narration}"</p>
+                        <div className="flex gap-2">
+                          <a href={scene.videoUrl} download={`scene-${idx+1}.mp4`} className="flex-1 bg-slate-900 text-white text-xs font-bold py-2 rounded-lg text-center">Video</a>
+                          <button onClick={() => alert("Audio download ready!")} className="flex-1 border border-slate-200 text-xs font-bold py-2 rounded-lg text-center">Audio</button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="max-w-4xl mx-auto py-24 text-center">
-              <div className="w-20 h-20 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-8" />
-              <h2 className="text-2xl font-bold">TourGenie is working...</h2>
-              <p className="text-slate-500">Processing scene {state.scenes.filter(s=>s.status==='completed').length + 1} of 5</p>
-            </div>
+            ) : (
+              <div className="max-w-4xl mx-auto py-24 text-center">
+                <div className="w-20 h-20 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-8" />
+                <h2 className="text-2xl font-bold">TourGenie is working...</h2>
+                <p className="text-slate-500">Processing scene {state.scenes.filter(s=>s.status==='completed').length + 1} of 5</p>
+              </div>
+            )
           )
         ) : (
           /* ADVANCED VIDEO EDITOR VIEW */
@@ -447,10 +467,10 @@ export default function App() {
       </main>
 
       {/* Deployment Status Indicator */}
-      <footer className="fixed bottom-4 left-4 z-[60]">
+      <footer className="fixed bottom-4 left-4 z-[60] flex gap-2">
         <div className="glass px-3 py-1.5 rounded-full border border-slate-200 flex items-center gap-2 shadow-sm text-[10px] font-bold uppercase tracking-wider text-slate-500">
           <ServerIcon className="w-3 h-3 text-green-500" />
-          Production Environment: Render (process.env.API_KEY active)
+          Env: Active
         </div>
       </footer>
     </div>
