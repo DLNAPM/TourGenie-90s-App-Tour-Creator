@@ -15,6 +15,14 @@ View your app in AI Studio: https://ai.studio/apps/drive/1dyAZphe887j7d1UcYeX700
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set `API_KEY` or `GEMINI_API_KEY` in `.env.local` to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Deploy on Render.com
+
+1. Create a new Static Site or Web Service connected to this repository.
+2. In the Render Dashboard under **Environment Variables**, add:
+   - **Key**: `API_KEY`
+   - **Value**: Your Google Gemini API Key
+3. Deploy! Render will build and run the application automatically.

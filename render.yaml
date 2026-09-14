@@ -12,5 +12,4 @@ services:
       - key: NODE_VERSION
         value: 22.14.0
       - key: API_KEY
-        placeholder: "Enter your Google Gemini API Key"
-        description: "Required for Gemini 3 and Veo video generation models."
+        sync: false

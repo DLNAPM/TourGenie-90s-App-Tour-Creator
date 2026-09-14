@@ -82,7 +82,7 @@ export default function App() {
   const secondsRemaining = Math.max(0, Math.ceil(MIN_DURATION - totalDuration));
 
   // Determine if we effectively have an API key available
-  const isApiReady = hasKey === true || (process.env.API_KEY && process.env.API_KEY !== 'RENDER_API_KEY_PLACEHOLDER' && process.env.API_KEY !== '');
+  const isApiReady = hasKey === true;
 
   useEffect(() => {
     checkKeyStatus();
@@ -92,7 +92,19 @@ export default function App() {
     try {
       if ((window as any).aistudio && typeof (window as any).aistudio.hasSelectedApiKey === 'function') {
         const selected = await (window as any).aistudio.hasSelectedApiKey();
-        setHasKey(selected);
+        if (selected) {
+          setHasKey(true);
+          return;
+        }
+      }
+      const backendHasKey = await tourService.checkBackendKey();
+      if (backendHasKey) {
+        setHasKey(true);
+        return;
+      }
+      const clientKey = (window as any).process?.env?.API_KEY || process.env.API_KEY || process.env.GEMINI_API_KEY;
+      if (clientKey && clientKey !== 'RENDER_API_KEY_PLACEHOLDER' && clientKey !== 'UNUSED_PLACEHOLDER_FOR_API_KEY' && clientKey.trim() !== '') {
+        setHasKey(true);
       } else {
         setHasKey(false);
       }
@@ -107,11 +119,18 @@ export default function App() {
         await (window as any).aistudio.openSelectKey();
         setHasKey(true); 
         setError(null);
+        return;
       } catch (e) {
         console.error("Failed to open key selection", e);
       }
-    } else {
-      setError("API Key selection is only available in the AI Studio environment.");
+    }
+    const customKey = prompt("Enter your Google Gemini API Key:");
+    if (customKey && customKey.trim()) {
+      (window as any).process = (window as any).process || { env: {} };
+      (window as any).process.env = (window as any).process.env || {};
+      (window as any).process.env.API_KEY = customKey.trim();
+      setHasKey(true);
+      setError(null);
     }
   };
 
