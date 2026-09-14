@@ -10,7 +10,18 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         host: '0.0.0.0',
       },
-      plugins: [react()],
+      plugins: [
+        react(),
+        {
+          name: 'html-transform',
+          transformIndexHtml(html) {
+            if (resolvedApiKey) {
+              return html.replace(/RENDER_API_KEY_PLACEHOLDER/g, resolvedApiKey);
+            }
+            return html;
+          }
+        }
+      ],
       define: {
         'process.env.API_KEY': resolvedApiKey ? JSON.stringify(resolvedApiKey) : '((typeof window !== "undefined" && window.process?.env?.API_KEY) || "")',
         'process.env.GEMINI_API_KEY': resolvedApiKey ? JSON.stringify(resolvedApiKey) : '((typeof window !== "undefined" && window.process?.env?.API_KEY) || "")'
