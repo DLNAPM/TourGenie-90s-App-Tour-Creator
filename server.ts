@@ -53,10 +53,15 @@ async function startServer() {
         Description: ${description || ""}
         Tour Script / Key Features: ${script || ""}
 
+        CRITICAL REQUIREMENT - 100% ENGLISH ONLY:
+        - Everything generated MUST be strictly in 100% fluent English.
+        - In each "visualPrompt", explicitly instruct that all on-screen UI text, mobile app interfaces, software buttons, headings, navigation bars, metrics, and menus MUST be rendered in 100% crisp, legible English. Strictly forbid foreign glyphs, non-Latin characters, Asian characters, Cyrillic, or pseudo-language symbols.
+        - In each "narration", write natural, professional voiceover script in 100% English.
+
         For each scene, provide:
         1. A timestamp (e.g. 0:00 - 0:15)
-        2. A "visualPrompt" describing exactly what should happen in a 5-10 second video clip. Focus on professional UI animation, cinematic camera moves, and sleek transitions.
-        3. A "narration" text that will be converted to speech.
+        2. A "visualPrompt" describing exactly what should happen in a 5-10 second video clip. Focus on professional UI animation, cinematic camera moves, and sleek transitions, specifying that all displayed UI labels and text are in 100% English.
+        3. A "narration" text that will be converted to speech in 100% English.
 
         Return as a JSON array of objects with keys: timestamp, visualPrompt, narration.
       `;
@@ -113,9 +118,12 @@ async function startServer() {
         aspectRatio: '16:9'
       };
 
+      const englishVisualGuard = "All visible on-screen text, user interface screens, buttons, navigation bars, mobile app elements, dialogs, charts, and captions must be rendered strictly in 100% legible English only. Absolutely NO foreign characters, NO Chinese, Japanese, or Korean glyphs, NO Cyrillic or Arabic script, and NO unreadable pseudo-text symbols. Every word on screen must be clean, standard English typography.";
+      const finalPrompt = visualPrompt ? `${visualPrompt.trim()}. ${englishVisualGuard}` : `Cinematic clean mobile and desktop app interface interaction in motion. ${englishVisualGuard}`;
+
       const payload: any = {
         model: 'veo-3.1-lite-generate-preview',
-        prompt: visualPrompt || 'Cinematic clean mobile and desktop app interface interaction in motion',
+        prompt: finalPrompt,
         config
       };
 
@@ -235,7 +243,7 @@ async function startServer() {
       try {
         response = await ai.models.generateContent({
           model: "gemini-3.1-flash-tts-preview",
-          contents: [{ parts: [{ text: `Say clearly and professionally: ${text}` }] }],
+          contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
           config: {
             responseModalities: [Modality.AUDIO],
             speechConfig: {
@@ -249,7 +257,7 @@ async function startServer() {
         // Fallback to gemini-2.5-flash-preview-tts if 3.1 tts is not yet available in current region
         response = await ai.models.generateContent({
           model: "gemini-2.5-flash-preview-tts",
-          contents: [{ parts: [{ text: `Say clearly and professionally: ${text}` }] }],
+          contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
           config: {
             responseModalities: [Modality.AUDIO],
             speechConfig: {
@@ -298,7 +306,7 @@ async function startServer() {
               }
             },
             {
-              text: "Analyze this video clip. Provide a brief 1-sentence description of what's happening and write a professional 10-second narration script for it. Return as JSON."
+              text: "Analyze this video clip. Provide a brief 1-sentence description in 100% fluent English and write a professional 10-second narration script in 100% fluent English. Ensure all output is strictly in English. Return as JSON."
             }
           ]
         },
@@ -335,7 +343,7 @@ async function startServer() {
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
-        contents: `Generate YouTube metadata for a video based on these scene analyses: ${summary}. Include a catchy title, a full description with timestamps, and 10 relevant tags.`,
+        contents: `Generate YouTube metadata strictly in 100% English for a video based on these scene analyses: ${summary}. Include a catchy title in English, a full description in English with timestamps, and 10 relevant English tags. All outputs must be 100% English.`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
