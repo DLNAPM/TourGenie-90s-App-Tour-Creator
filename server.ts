@@ -48,24 +48,24 @@ async function startServer() {
       const hasScreenshots = screenshotCount > 0;
 
       const prompt = `
-        Act as a world-class commercial video director. Create a 5-scene storyboard for a 90-second app tour video.
+        Act as a professional software video tour director. Create a 5-scene storyboard for a 90-second app tour video.
         App Name: ${name || "My App"}
         App URL: ${url || ""}
         Description: ${description || ""}
         Tour Script / Key Features: ${script || ""}
-        Screenshots Provided: ${hasScreenshots ? `${screenshotCount} real application screenshots provided (100% U.S. English)` : "None (synthesizing UI)"}
+        Screenshots Provided: ${hasScreenshots ? `${screenshotCount} real application screenshots provided in 100% U.S. English` : "None"}
 
         CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:
         - Everything generated MUST be strictly in 100% fluent American English.
         - ${hasScreenshots 
-            ? `IMPORTANT: The user has provided real app screenshots in 100% U.S. English. In each "visualPrompt", specify direct, cinematic camera motion across the provided screenshot interface (for example: smooth slow push-in zoom into navigation and metrics, smooth horizontal pan from left to right across feature cards, gentle vertical tilt revealing data, elegant steady glide). The camera must move directly across the interface with crisp focus, clear lighting, and razor-sharp clarity, keeping all original English text pristine.`
-            : `In each "visualPrompt", specify clean modern software interface presentations with sleek motion graphics and minimal, bold American English typography (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS').`
+            ? `IMPORTANT: The user has provided real application screenshots in 100% U.S. English. In each "visualPrompt", describe ONLY 2D camera motions across the user's interface screencast (for example: "Smooth slow push-in zoom into the main dashboard metrics", "Gentle horizontal pan across the navigation items from left to right", "Smooth vertical glide down the detail view", "Slow steady zoom-out revealing the full interface layout"). DO NOT mention physical rooms, offices, gyms, smartphones, 3D devices, floating phones, or hand-held mockups. The video is a clean, direct 2D screen tour of the user's software.`
+            : `In each "visualPrompt", specify clean modern 2D software interface presentations with sleek motion graphics and crisp American English typography (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS').`
           }
         - In each "narration", write natural, engaging voiceover script in 100% fluent American English.
 
         For each scene, provide:
         1. A timestamp (e.g. 0:00 - 0:18)
-        2. A "visualPrompt" describing the camera motion, lighting, and visual focus for a 5-10 second video clip, ensuring 100% U.S. English text fidelity.
+        2. A "visualPrompt" describing 2D screencast camera movement across the interface in crisp focus.
         3. A "narration" text that will be converted to speech in 100% fluent U.S. English.
 
         Return as a JSON array of objects with keys: timestamp, visualPrompt, narration.
@@ -125,14 +125,18 @@ async function startServer() {
 
       let finalPrompt: string;
       if (screenshot) {
-        const cleanMotion = visualPrompt ? visualPrompt.trim() : "Smooth cinematic camera glide across the interface.";
+        // Strip out any accidental mentions of simulated 3D phones, mockups, rooms, or device frames
+        let cleanMotion = visualPrompt ? visualPrompt.trim() : "Smooth slow push-in zoom into the interface.";
+        cleanMotion = cleanMotion
+          .replace(/(?:sleek\s+)?smartphones?|(?:3d\s+)?mockups?|devices?|floating\s+(?:phone|device)|in[- ]hand/gi, "interface")
+          .replace(/(?:ambient|studio|gym|office)\s+(?:aesthetic\s+)?background/gi, "display")
+          .replace(/foreign\s+artifacts|pseudo-symbols|non-english/gi, "")
+          .trim();
+
         finalPrompt = [
-          `High-definition commercial product tour animating this application screenshot.`,
+          `Commercial 2D screencast animation of the application interface.`,
           `CAMERA MOTION: ${cleanMotion}`,
-          `VISUAL DIRECTIVES:`,
-          `- Preserve the exact user interface layout, buttons, cards, and English text from the provided reference screenshot with 100% fidelity.`,
-          `- Keep all text razor-sharp, crisp, and completely legible standard American English.`,
-          `- Smooth professional camera movement with soft studio lighting reflections and crystal-clear presentation.`
+          `DIRECTIVES: Flat 2D screencast video, steady smooth camera glide across the screen, razor-sharp focus on the original English text and UI elements, zero 3D perspective distortion.`
         ].join(" ");
       } else {
         finalPrompt = [

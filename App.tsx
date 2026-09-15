@@ -242,8 +242,8 @@ export default function App() {
         const targetRatio = 16 / 9;
         const imgRatio = img.naturalWidth / img.naturalHeight;
 
-        // If already approximately 16:9 (between 1.70 and 1.85), keep original
-        if (Math.abs(imgRatio - targetRatio) < 0.08) {
+        // If already landscape (ratio between 1.35 and 1.95), preserve the original image with 100% fidelity
+        if (imgRatio >= 1.35 && imgRatio <= 1.95) {
           resolve(dataUrl);
           return;
         }
@@ -257,51 +257,21 @@ export default function App() {
           return;
         }
 
-        // 1. Sleek neutral studio backdrop
-        ctx.fillStyle = '#0f172a';
+        // Clean, solid, distraction-free studio background (ZERO blurred ghost artifacts or smeared text)
+        ctx.fillStyle = '#0b0f19';
         ctx.fillRect(0, 0, targetWidth, targetHeight);
 
-        // Ambient glow derived from screenshot
-        ctx.save();
-        ctx.filter = 'blur(40px) brightness(0.35)';
-        ctx.drawImage(img, -20, -20, targetWidth + 40, targetHeight + 40);
-        ctx.restore();
-
-        // 2. Center screenshot cleanly maintaining exact aspect ratio
-        let drawWidth = targetWidth;
-        let drawHeight = targetHeight;
-
-        if (imgRatio < targetRatio) {
-          drawHeight = Math.round(targetHeight * 0.94);
-          drawWidth = Math.round(drawHeight * imgRatio);
-        } else {
-          drawWidth = Math.round(targetWidth * 0.94);
-          drawHeight = Math.round(drawWidth / imgRatio);
-        }
-
+        // Center the portrait screenshot cleanly at maximum vertical height
+        const drawHeight = Math.round(targetHeight * 0.95);
+        const drawWidth = Math.round(drawHeight * imgRatio);
         const x = Math.round((targetWidth - drawWidth) / 2);
         const y = Math.round((targetHeight - drawHeight) / 2);
 
-        // Clean drop shadow
+        // Crisp, clean device frame shadow
         ctx.save();
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
-        ctx.shadowBlur = 24;
-        ctx.shadowOffsetY = 8;
-
-        const radius = 12;
-        ctx.beginPath();
-        ctx.moveTo(x + radius, y);
-        ctx.lineTo(x + drawWidth - radius, y);
-        ctx.quadraticCurveTo(x + drawWidth, y, x + drawWidth, y + radius);
-        ctx.lineTo(x + drawWidth, y + drawHeight - radius);
-        ctx.quadraticCurveTo(x + drawWidth, y + drawHeight, x + drawWidth - radius, y + drawHeight);
-        ctx.lineTo(x + radius, y + drawHeight);
-        ctx.quadraticCurveTo(x, y + drawHeight, x, y + drawHeight - radius);
-        ctx.lineTo(x, y + radius);
-        ctx.quadraticCurveTo(x, y, x + radius, y);
-        ctx.closePath();
-        ctx.clip();
-
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+        ctx.shadowBlur = 18;
+        ctx.shadowOffsetY = 6;
         ctx.drawImage(img, x, y, drawWidth, drawHeight);
         ctx.restore();
 
