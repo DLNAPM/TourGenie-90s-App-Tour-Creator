@@ -27,16 +27,6 @@
       // Shim process.env for browser compatibility
       window.process = window.process || { env: {} };
       window.process.env = window.process.env || {};
-      
-      // Placeholder to be replaced by Render.com buildCommand
-      const renderKey = 'RENDER_API_KEY_PLACEHOLDER';
-      
-      // Only set API_KEY if a real key was injected during build
-      if (renderKey && renderKey !== 'RENDER_API_KEY_PLACEHOLDER' && renderKey !== '') {
-        window.process.env.API_KEY = renderKey;
-      }
-      
-      // Default NODE_ENV if not set
       if (!window.process.env.NODE_ENV) {
         window.process.env.NODE_ENV = 'production';
       }

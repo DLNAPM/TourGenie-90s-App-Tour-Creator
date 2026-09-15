@@ -9,10 +9,6 @@ function getClientApiKey(): string {
       return key;
     }
   }
-  const directKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-  if (directKey && directKey !== "UNUSED_PLACEHOLDER_FOR_API_KEY" && directKey !== "RENDER_API_KEY_PLACEHOLDER") {
-    return directKey;
-  }
   return "";
 }
 
@@ -44,7 +40,7 @@ export class TourService {
   }
 
   async createStoryboards(input: AppInput): Promise<Scene[]> {
-    // 1. Try Server-Side API first
+    // 1. Server-Side API (reads API_KEY from Render environment)
     try {
       const res = await fetch("/api/generate-storyboard", {
         method: "POST",
@@ -66,23 +62,24 @@ export class TourService {
       } else {
         const err = await res.json().catch(() => ({}));
         if (res.status === 401) {
-          throw new Error(err.error || "Gemini API key is required. Please connect your key.");
+          throw new Error(err.error || "Gemini API key is required. Please set 'API_KEY' in Render.com's environment variables.");
         }
-        if (res.status >= 400 && res.status < 500) {
-          throw new Error(err.error || `Storyboard request failed: ${res.status}`);
-        }
+        throw new Error(err.error || `Storyboard request failed: ${res.status}`);
       }
     } catch (e: any) {
-      // If error was an explicit key error, rethrow
-      if (e.message?.includes("API key") || e.message?.includes("key is required")) {
+      if (e.message?.includes("API key") || e.message?.includes("required") || e.message?.includes("failed")) {
         throw e;
       }
-      console.warn("Backend /api/generate-storyboard unavailable, trying direct SDK fallback...", e);
+      console.warn("Backend /api/generate-storyboard unavailable, attempting client fallback...", e);
     }
 
-    // 2. Client-side SDK Fallback
+    // 2. Client-side SDK Fallback (if client key is explicitly present)
     const apiKey = getClientApiKey();
-    const ai = new GoogleGenAI({ apiKey: apiKey || undefined });
+    if (!apiKey) {
+      throw new Error("Gemini API key is missing. Please configure 'API_KEY' in Render.com environment variables.");
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
     const prompt = `
       Act as a world-class video director. Create a 5-scene storyboard for a 90-second app tour video.
       App Name: ${input.name}
@@ -129,9 +126,10 @@ export class TourService {
   }
 
   async generateSceneVideo(scene: Scene, screenshot?: string): Promise<string> {
-    // 1. Try Server-Side API first (recommended for Veo video streaming)
+    // 1. Server-Side Video Generation and Streaming (uses Render.com API_KEY)
+    let initRes: Response | null = null;
     try {
-      const initRes = await fetch("/api/generate-video", {
+      initRes = await fetch("/api/generate-video", {
         method: "POST",
         headers: getApiHeaders(),
         body: JSON.stringify({
@@ -139,7 +137,11 @@ export class TourService {
           screenshot
         })
       });
+    } catch (netErr: any) {
+      console.warn("Could not reach /api/generate-video backend:", netErr);
+    }
 
+    if (initRes) {
       if (initRes.ok) {
         const { operationName } = await initRes.json();
         if (!operationName) {
@@ -177,7 +179,9 @@ export class TourService {
           throw new Error("Video generation timed out. Please try again with a simpler prompt.");
         }
 
-        // Download the final MP4 video via server proxy (which attaches valid authorization)
+        // Download the final MP4 video via server proxy
+        // The server fetches the file using headers and streams raw bytes to the browser.
+        // The API key is NEVER passed in the URL.
         const downloadRes = await fetch("/api/video-download", {
           method: "POST",
           headers: getApiHeaders(),
@@ -195,21 +199,16 @@ export class TourService {
         }
 
         return URL.createObjectURL(videoBlob);
-      } else if (initRes.status === 401) {
+      } else {
         const err = await initRes.json().catch(() => ({}));
-        throw new Error(err.error || "API Key required for video generation. Please connect your key.");
+        throw new Error(err.error || `Video generation failed with status ${initRes.status}. Ensure 'API_KEY' is set in Render.com.`);
       }
-    } catch (e: any) {
-      if (e.message?.includes("API Key required") || e.message?.includes("timed out") || e.message?.includes("Invalid or empty")) {
-        throw e;
-      }
-      console.warn("Backend video generation failed or not available, attempting client-side fallback...", e);
     }
 
-    // 2. Client-side SDK Fallback
+    // 2. Client-side SDK Fallback (Only if direct client key is explicitly configured)
     const clientKey = getClientApiKey();
     if (!clientKey) {
-      throw new Error("A valid Gemini API Key is required to generate videos. Please connect your API key.");
+      throw new Error("Gemini API Key is missing. Please configure the 'API_KEY' environment variable in your Render.com dashboard.");
     }
 
     const ai = new GoogleGenAI({ apiKey: clientKey });
@@ -240,15 +239,10 @@ export class TourService {
     const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
     if (!downloadLink) throw new Error("Video generation failed - no video URI returned by Veo.");
 
-    // Secure fetch using authorization header or fallback to key param
-    let response = await fetch(downloadLink, {
+    // Fetch video using header only - NEVER pass the API key in the URL
+    const response = await fetch(downloadLink, {
       headers: { "x-goog-api-key": clientKey }
     });
-
-    if (!response.ok) {
-      const fallbackUrl = downloadLink.includes('?') ? `${downloadLink}&key=${clientKey}` : `${downloadLink}?key=${clientKey}`;
-      response = await fetch(fallbackUrl);
-    }
 
     if (!response.ok) {
       const errText = await response.text();
@@ -263,7 +257,7 @@ export class TourService {
   }
 
   async generateNarration(text: string): Promise<string> {
-    // 1. Try Server-Side API first
+    // 1. Server-Side API
     try {
       const res = await fetch("/api/generate-narration", {
         method: "POST",
@@ -278,12 +272,15 @@ export class TourService {
         }
       }
     } catch {
-      // Fall through to client SDK
+      // Fall through
     }
 
     // 2. Client-side SDK Fallback
     const apiKey = getClientApiKey();
-    const ai = new GoogleGenAI({ apiKey: apiKey || undefined });
+    if (!apiKey) {
+      throw new Error("Gemini API Key missing. Please set 'API_KEY' in Render.com.");
+    }
+    const ai = new GoogleGenAI({ apiKey });
     
     let response;
     try {
@@ -326,7 +323,7 @@ export class TourService {
 
     const base64 = await this.fileToBase64(file);
 
-    // 1. Try Server-Side API first
+    // 1. Server-Side API
     try {
       const res = await fetch("/api/analyze-video", {
         method: "POST",
@@ -341,12 +338,15 @@ export class TourService {
         }
       }
     } catch {
-      // Fall through to client SDK
+      // Fall through
     }
 
     // 2. Client-side SDK Fallback
     const apiKey = getClientApiKey();
-    const ai = new GoogleGenAI({ apiKey: apiKey || undefined });
+    if (!apiKey) {
+      throw new Error("Gemini API Key missing. Please set 'API_KEY' in Render.com.");
+    }
+    const ai = new GoogleGenAI({ apiKey });
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
@@ -382,7 +382,7 @@ export class TourService {
   async generateYouTubeMetadata(clips: EditorClip[]): Promise<{ title: string; description: string; tags: string[] }> {
     const summary = clips.map(c => c.analysis).join(". ");
 
-    // 1. Try Server-Side API first
+    // 1. Server-Side API
     try {
       const res = await fetch("/api/youtube-metadata", {
         method: "POST",
@@ -397,12 +397,15 @@ export class TourService {
         }
       }
     } catch {
-      // Fall through to client SDK
+      // Fall through
     }
 
     // 2. Client-side SDK Fallback
     const apiKey = getClientApiKey();
-    const ai = new GoogleGenAI({ apiKey: apiKey || undefined });
+    if (!apiKey) {
+      throw new Error("Gemini API Key missing. Please set 'API_KEY' in Render.com.");
+    }
+    const ai = new GoogleGenAI({ apiKey });
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',

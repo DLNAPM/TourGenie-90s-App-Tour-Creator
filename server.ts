@@ -194,21 +194,15 @@ async function startServer() {
         return res.status(404).json({ error: "No video download URI found in completed operation" });
       }
 
-      // Try fetching using x-goog-api-key header first
-      let videoRes = await fetch(uri, {
+      // Fetch video using x-goog-api-key header - API key is never passed in the URL
+      const videoRes = await fetch(uri, {
         headers: { 'x-goog-api-key': apiKey }
       });
-
-      // If header rejected or 400+, fallback to query parameter
-      if (!videoRes.ok) {
-        const fallbackUrl = uri.includes('?') ? `${uri}&key=${apiKey}` : `${uri}?key=${apiKey}`;
-        videoRes = await fetch(fallbackUrl);
-      }
 
       if (!videoRes.ok) {
         const errText = await videoRes.text();
         console.error("Google Files download failed:", videoRes.status, errText);
-        return res.status(videoRes.status).json({ error: `Video download failed: ${errText}` });
+        return res.status(videoRes.status).json({ error: `Video download failed (${videoRes.status}): ${errText}` });
       }
 
       const contentType = videoRes.headers.get("content-type") || "video/mp4";
