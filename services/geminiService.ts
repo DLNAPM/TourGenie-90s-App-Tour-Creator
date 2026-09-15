@@ -92,8 +92,8 @@ export class TourService {
       CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:
       - Everything generated MUST be strictly in 100% fluent American English.
       - ${hasScreenshots 
-          ? `IMPORTANT: The user has provided real app screenshots in 100% U.S. English. In each "visualPrompt", describe cinematic camera motions (e.g. slow zoom-in, smooth horizontal pan, tilt, subtle lighting sweep, floating perspective) that showcase the user's real screenshot. Instruct the video generator to preserve the original English text and UI elements with 100% fidelity, strictly forbidding any foreign glyphs, Asian characters, or text alteration.`
-          : `In each "visualPrompt", specify clean modern 3D device mockups with sleek motion graphics. Any on-screen typography must be minimal, bold, 100% U.S. English only (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS'). Strictly forbid foreign characters, Asian scripts, Cyrillic, or pseudo-symbols.`
+          ? `IMPORTANT: The user has provided real app screenshots in 100% U.S. English. In each "visualPrompt", specify direct, cinematic camera motion across the provided screenshot interface (for example: smooth slow push-in zoom into navigation and metrics, smooth horizontal pan from left to right across feature cards, gentle vertical tilt revealing data, elegant steady glide). The camera must move directly across the interface with crisp focus, clear lighting, and razor-sharp clarity, keeping all original English text pristine.`
+          : `In each "visualPrompt", specify clean modern software interface presentations with sleek motion graphics and minimal, bold American English typography (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS').`
         }
       - In each "narration", write natural, engaging voiceover script in 100% fluent American English.
 
@@ -229,43 +229,49 @@ export class TourService {
     };
     let finalPrompt: string;
     if (screenshot) {
+      const cleanMotion = scene.visualPrompt ? scene.visualPrompt.trim() : "Smooth cinematic camera glide across the interface.";
       finalPrompt = [
-        `Cinematic animation of the provided application screenshot.`,
-        `CAMERA MOTION: ${scene.visualPrompt ? scene.visualPrompt.trim() : "Smooth cinematic camera glide across the interface with subtle zoom, elegant panning, and soft studio lighting sweep."}`,
-        `CRITICAL REQUIREMENT - PRESERVE 100% U.S. ENGLISH SOURCE IMAGE:`,
-        `- The input reference image is already 100% U.S. English. You MUST preserve all existing English words, labels, buttons, typography, and interface layout exactly as shown in the source image with 100% fidelity.`,
-        `- DO NOT alter, replace, warp, translate, or redraw any text from the reference image.`,
-        `- DO NOT generate foreign characters, Asian glyphs, Chinese, Japanese, Korean, Cyrillic, or alien pseudo-language symbols.`,
-        `- Animate strictly using camera motion (slow push-in zoom, gentle horizontal pan, subtle tilt, floating parallax, soft light reflection) without generating new synthetic text.`,
-        `- All existing English text from the input screenshot must remain crisp, razor-sharp, and fully legible throughout the video.`
+        `High-definition commercial product tour animating this application screenshot.`,
+        `CAMERA MOTION: ${cleanMotion}`,
+        `VISUAL DIRECTIVES:`,
+        `- Preserve the exact user interface layout, buttons, cards, and English text from the provided reference screenshot with 100% fidelity.`,
+        `- Keep all text razor-sharp, crisp, and completely legible standard American English.`,
+        `- Smooth professional camera movement with soft studio lighting reflections and crystal-clear presentation.`
       ].join(" ");
     } else {
       finalPrompt = [
-        scene.visualPrompt ? scene.visualPrompt.trim() : "Cinematic modern digital interface showcase in motion.",
-        `CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:`,
-        `- All on-screen elements, labels, and text must be rendered strictly in 100% standard American English.`,
-        `- Absolutely NO foreign characters, Asian glyphs, Chinese, Japanese, Korean, Cyrillic, Arabic, or distorted pseudo-text symbols.`,
-        `- Keep on-screen typography minimal, clean, bold, and modern (e.g. single words like 'DASHBOARD', 'START', 'METRICS'). Avoid dense blocks of small text.`,
-        `- Focus on clean modern 3D device mockups, motion graphics, abstract charts, and smooth UI transitions.`
+        scene.visualPrompt ? scene.visualPrompt.trim() : "Cinematic digital interface showcase in motion.",
+        `Clean modern minimalist interface presentation with crisp typography in standard American English, smooth UI motion graphics, professional product demo.`
       ].join(" ");
     }
 
-    const payload: any = {
-      model: 'veo-3.1-lite-generate-preview',
-      prompt: finalPrompt,
-      config
-    };
-
+    let payloadImage: any = undefined;
     if (screenshot) {
       const mimeMatch = screenshot.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
       const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
-      payload.image = {
+      payloadImage = {
         imageBytes: screenshot.includes(',') ? screenshot.split(',')[1] : screenshot,
         mimeType: mimeType
       };
     }
 
-    let operation = await ai.models.generateVideos(payload);
+    let operation: any;
+    try {
+      operation = await ai.models.generateVideos({
+        model: 'veo-3.1-generate-preview',
+        prompt: finalPrompt,
+        config,
+        ...(payloadImage ? { image: payloadImage } : {})
+      });
+    } catch (tierErr: any) {
+      console.warn("veo-3.1-generate-preview fallback to lite in client SDK:", tierErr?.message);
+      operation = await ai.models.generateVideos({
+        model: 'veo-3.1-lite-generate-preview',
+        prompt: finalPrompt,
+        config,
+        ...(payloadImage ? { image: payloadImage } : {})
+      });
+    }
     while (!operation.done) {
       await new Promise(resolve => setTimeout(resolve, 8000));
       operation = await ai.operations.getVideosOperation({ operation: operation });

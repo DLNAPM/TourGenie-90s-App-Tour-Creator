@@ -232,16 +232,98 @@ export default function App() {
     setTimeout(() => setIsUploadComplete(true), 800);
   };
 
+  // Helper: Normalize uploaded screenshots to standard 16:9 canvas to prevent video model outpainting hallucinations
+  const normalizeScreenshotTo16x9 = (dataUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const targetWidth = 1280;
+        const targetHeight = 720;
+        const targetRatio = 16 / 9;
+        const imgRatio = img.naturalWidth / img.naturalHeight;
+
+        // If already approximately 16:9 (between 1.70 and 1.85), keep original
+        if (Math.abs(imgRatio - targetRatio) < 0.08) {
+          resolve(dataUrl);
+          return;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+
+        // 1. Sleek neutral studio backdrop
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+        // Ambient glow derived from screenshot
+        ctx.save();
+        ctx.filter = 'blur(40px) brightness(0.35)';
+        ctx.drawImage(img, -20, -20, targetWidth + 40, targetHeight + 40);
+        ctx.restore();
+
+        // 2. Center screenshot cleanly maintaining exact aspect ratio
+        let drawWidth = targetWidth;
+        let drawHeight = targetHeight;
+
+        if (imgRatio < targetRatio) {
+          drawHeight = Math.round(targetHeight * 0.94);
+          drawWidth = Math.round(drawHeight * imgRatio);
+        } else {
+          drawWidth = Math.round(targetWidth * 0.94);
+          drawHeight = Math.round(drawWidth / imgRatio);
+        }
+
+        const x = Math.round((targetWidth - drawWidth) / 2);
+        const y = Math.round((targetHeight - drawHeight) / 2);
+
+        // Clean drop shadow
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+        ctx.shadowBlur = 24;
+        ctx.shadowOffsetY = 8;
+
+        const radius = 12;
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + drawWidth - radius, y);
+        ctx.quadraticCurveTo(x + drawWidth, y, x + drawWidth, y + radius);
+        ctx.lineTo(x + drawWidth, y + drawHeight - radius);
+        ctx.quadraticCurveTo(x + drawWidth, y + drawHeight, x + drawWidth - radius, y + drawHeight);
+        ctx.lineTo(x + radius, y + drawHeight);
+        ctx.quadraticCurveTo(x, y + drawHeight, x, y + drawHeight - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        ctx.clip();
+
+        ctx.drawImage(img, x, y, drawWidth, drawHeight);
+        ctx.restore();
+
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  };
+
   // --- Tour Creator Logic ---
   const handleScreenshotUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
     Array.from(files as FileList).forEach((file: File) => {
       const reader = new FileReader();
-      reader.onloadend = () => {
+      reader.onloadend = async () => {
+        const raw = reader.result as string;
+        const normalized = await normalizeScreenshotTo16x9(raw);
         setInput(prev => ({
           ...prev,
-          screenshots: [...prev.screenshots, reader.result as string]
+          screenshots: [...prev.screenshots, normalized]
         }));
       };
       reader.readAsDataURL(file);
