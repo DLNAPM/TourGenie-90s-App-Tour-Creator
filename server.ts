@@ -45,23 +45,28 @@ async function startServer() {
       }
       const ai = new GoogleGenAI({ apiKey });
       const { name, url, description, script, screenshotCount = 0 } = req.body;
+      const hasScreenshots = screenshotCount > 0;
 
       const prompt = `
-        Act as a world-class video director. Create a 5-scene storyboard for a 90-second app tour video.
+        Act as a world-class commercial video director. Create a 5-scene storyboard for a 90-second app tour video.
         App Name: ${name || "My App"}
         App URL: ${url || ""}
         Description: ${description || ""}
         Tour Script / Key Features: ${script || ""}
+        Screenshots Provided: ${hasScreenshots ? `${screenshotCount} real application screenshots provided (100% U.S. English)` : "None (synthesizing UI)"}
 
-        CRITICAL REQUIREMENT - 100% ENGLISH ONLY:
-        - Everything generated MUST be strictly in 100% fluent English.
-        - In each "visualPrompt", explicitly instruct that all on-screen UI text, mobile app interfaces, software buttons, headings, navigation bars, metrics, and menus MUST be rendered in 100% crisp, legible English. Strictly forbid foreign glyphs, non-Latin characters, Asian characters, Cyrillic, or pseudo-language symbols.
-        - In each "narration", write natural, professional voiceover script in 100% English.
+        CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:
+        - Everything generated MUST be strictly in 100% fluent American English.
+        - ${hasScreenshots 
+            ? `IMPORTANT: The user has provided real app screenshots in 100% U.S. English. In each "visualPrompt", describe cinematic camera motions (e.g. slow zoom-in, smooth horizontal pan, tilt, subtle lighting sweep, floating perspective) that showcase the user's real screenshot. Instruct the video generator to preserve the original English text and UI elements with 100% fidelity, strictly forbidding any foreign glyphs, Asian characters, or text alteration.`
+            : `In each "visualPrompt", specify clean modern 3D device mockups with sleek motion graphics. Any on-screen typography must be minimal, bold, 100% U.S. English only (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS'). Strictly forbid foreign characters, Asian scripts, Cyrillic, or pseudo-symbols.`
+          }
+        - In each "narration", write natural, engaging voiceover script in 100% fluent American English.
 
         For each scene, provide:
-        1. A timestamp (e.g. 0:00 - 0:15)
-        2. A "visualPrompt" describing exactly what should happen in a 5-10 second video clip. Focus on professional UI animation, cinematic camera moves, and sleek transitions, specifying that all displayed UI labels and text are in 100% English.
-        3. A "narration" text that will be converted to speech in 100% English.
+        1. A timestamp (e.g. 0:00 - 0:18)
+        2. A "visualPrompt" describing the camera motion, lighting, and visual focus for a 5-10 second video clip, ensuring 100% U.S. English text fidelity.
+        3. A "narration" text that will be converted to speech in 100% fluent U.S. English.
 
         Return as a JSON array of objects with keys: timestamp, visualPrompt, narration.
       `;
@@ -92,7 +97,7 @@ async function startServer() {
         ...s,
         id: `scene-${i}`,
         status: 'pending',
-        screenshotIndex: i < screenshotCount ? i : undefined
+        screenshotIndex: hasScreenshots ? (i % screenshotCount) : undefined
       }));
 
       res.json({ scenes });
@@ -118,8 +123,28 @@ async function startServer() {
         aspectRatio: '16:9'
       };
 
-      const englishVisualGuard = "All visible on-screen text, user interface screens, buttons, navigation bars, mobile app elements, dialogs, charts, and captions must be rendered strictly in 100% legible English only. Absolutely NO foreign characters, NO Chinese, Japanese, or Korean glyphs, NO Cyrillic or Arabic script, and NO unreadable pseudo-text symbols. Every word on screen must be clean, standard English typography.";
-      const finalPrompt = visualPrompt ? `${visualPrompt.trim()}. ${englishVisualGuard}` : `Cinematic clean mobile and desktop app interface interaction in motion. ${englishVisualGuard}`;
+      let finalPrompt: string;
+      if (screenshot) {
+        finalPrompt = [
+          `Cinematic animation of the provided application screenshot.`,
+          `CAMERA MOTION: ${visualPrompt ? visualPrompt.trim() : "Smooth cinematic camera glide across the interface with subtle zoom, elegant panning, and soft studio lighting sweep."}`,
+          `CRITICAL REQUIREMENT - PRESERVE 100% U.S. ENGLISH SOURCE IMAGE:`,
+          `- The input reference image is already 100% U.S. English. You MUST preserve all existing English words, labels, buttons, typography, and interface layout exactly as shown in the source image with 100% fidelity.`,
+          `- DO NOT alter, replace, warp, translate, or redraw any text from the reference image.`,
+          `- DO NOT generate foreign characters, Asian glyphs, Chinese, Japanese, Korean, Cyrillic, or alien pseudo-language symbols.`,
+          `- Animate strictly using camera motion (slow push-in zoom, gentle horizontal pan, subtle tilt, floating parallax, soft light reflection) without generating new synthetic text.`,
+          `- All existing English text from the input screenshot must remain crisp, razor-sharp, and fully legible throughout the video.`
+        ].join(" ");
+      } else {
+        finalPrompt = [
+          visualPrompt ? visualPrompt.trim() : "Cinematic modern digital interface showcase in motion.",
+          `CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:`,
+          `- All on-screen elements, labels, and text must be rendered strictly in 100% standard American English.`,
+          `- Absolutely NO foreign characters, Asian glyphs, Chinese, Japanese, Korean, Cyrillic, Arabic, or distorted pseudo-text symbols.`,
+          `- Keep on-screen typography minimal, clean, bold, and modern (e.g. single words like 'DASHBOARD', 'START', 'METRICS'). Avoid dense blocks of small text.`,
+          `- Focus on clean modern 3D device mockups, motion graphics, abstract charts, and smooth UI transitions.`
+        ].join(" ");
+      }
 
       const payload: any = {
         model: 'veo-3.1-lite-generate-preview',
@@ -128,10 +153,12 @@ async function startServer() {
       };
 
       if (screenshot) {
+        const mimeMatch = screenshot.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
         const rawBase64 = screenshot.includes(',') ? screenshot.split(',')[1] : screenshot;
         payload.image = {
           imageBytes: rawBase64,
-          mimeType: 'image/png'
+          mimeType: mimeType
         };
       }
 

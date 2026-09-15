@@ -267,9 +267,12 @@ export default function App() {
         updatedScenes[i].status = 'generating';
         setState(prev => ({ ...prev, scenes: [...updatedScenes], progress: 30 + (i * 10) }));
         try {
-          const screenshot = updatedScenes[i].screenshotIndex !== undefined 
-            ? input.screenshots[updatedScenes[i].screenshotIndex!] 
-            : undefined;
+          const screenshotIndex = updatedScenes[i].screenshotIndex !== undefined 
+            ? updatedScenes[i].screenshotIndex! 
+            : (input.screenshots.length > 0 ? (i % input.screenshots.length) : undefined);
+          const screenshot = (screenshotIndex !== undefined && input.screenshots[screenshotIndex])
+            ? input.screenshots[screenshotIndex]
+            : (input.screenshots.length > 0 ? input.screenshots[i % input.screenshots.length] : undefined);
           const videoUrl = await tourService.generateSceneVideo(updatedScenes[i], screenshot);
           const audioBase64 = await tourService.generateNarration(updatedScenes[i].narration);
           updatedScenes[i].videoUrl = videoUrl;
