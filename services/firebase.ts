@@ -201,6 +201,24 @@ export async function logoutUser(): Promise<void> {
 }
 
 // Session Persistence Helpers
+export async function getSessionAudio(sessionId: string): Promise<Record<string, string>> {
+  try {
+    const audioCol = collection(db, "sessions", sessionId, "audio");
+    const snap = await getDocs(audioCol);
+    const map: Record<string, string> = {};
+    snap.forEach((d) => {
+      const data = d.data();
+      if (data?.audioBase64) {
+        map[d.id] = data.audioBase64;
+      }
+    });
+    return map;
+  } catch (err) {
+    console.warn("Could not fetch session audio chunks:", err);
+    return {};
+  }
+}
+
 export async function saveUserSession(
   userId: string, 
   session: Omit<SavedProjectSession, "userId" | "createdAt" | "updatedAt"> & { sharedWithEmails?: string[]; isPublic?: boolean }
@@ -208,13 +226,43 @@ export async function saveUserSession(
   const sessionId = session.id || `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const currentUser = auth.currentUser;
   
-  // 1. Process clips with image compression and robust field mapping
+  // 1. Process and compress screenshots (the authoritative image source)
+  const rawScreenshots = session.screenshots || [];
+  let processedScreenshots = await Promise.all(
+    rawScreenshots.map(async (shot: string) => {
+      if (shot?.startsWith("data:image")) {
+        return await compressImageForStorage(shot, 640, 0.58);
+      }
+      return shot || "";
+    })
+  );
+
+  // 2. Offload heavy audio (raw PCM TTS can be 1MB+ per clip) into audio subcollection documents
+  // Each subcollection doc gets its own 1MB limit, keeping the main session doc tiny (~100KB)
+  const audioChunksToSave: Array<{ id: string; audioBase64: string }> = [];
+
+  // Process clips: deduplicate images and strip bulky ephemeral data
   const rawClips = session.clips || [];
   const processedClips = await Promise.all(
     rawClips.map(async (c: any, index: number) => {
-      const screenshot = c.screenshotUrl || c.rawScreenshot || (c.previewUrl?.startsWith("data:image") ? c.previewUrl : "") || "";
-      const compressedShot = screenshot.startsWith("data:image") ? await compressImageForStorage(screenshot) : screenshot;
+      const shotIndex = c.screenshotIndex !== undefined ? c.screenshotIndex : index;
+      const matchingScreenshot = processedScreenshots[shotIndex] || "";
+      const rawShot = c.screenshotUrl || c.rawScreenshot || (c.previewUrl?.startsWith("data:image") ? c.previewUrl : "") || "";
       
+      // If clip has a unique screenshot not in processedScreenshots, compress it
+      let compressedShot = "";
+      if (rawShot && rawShot !== matchingScreenshot) {
+        compressedShot = rawShot.startsWith("data:image") 
+          ? await compressImageForStorage(rawShot, 640, 0.58) 
+          : rawShot;
+      }
+
+      // Collect audio chunk for dedicated subcollection storage
+      if (c.audioUrl && typeof c.audioUrl === 'string' && c.audioUrl.length > 100) {
+        const chunkId = c.id || `clip_${index}`;
+        audioChunksToSave.push({ id: chunkId, audioBase64: c.audioUrl });
+      }
+
       return {
         id: c.id || `clip_${index}`,
         order: index,
@@ -224,40 +272,41 @@ export async function saveUserSession(
         analysis: c.analysis || c.narration || "",
         cameraMotion: c.cameraMotion || "Slow Zoom In",
         resolution: c.resolution || "1080p Full HD",
-        previewUrl: c.previewUrl || c.videoUrl || compressedShot || "",
-        videoUrl: c.videoUrl || "",
+        // Avoid duplicating large data URLs: reference screenshot or use lightweight compressed shot
+        previewUrl: compressedShot ? "" : (c.previewUrl && !c.previewUrl.startsWith("blob:") && !c.previewUrl.startsWith("data:") ? c.previewUrl : ""),
+        videoUrl: c.videoUrl && !c.videoUrl.startsWith("blob:") && !c.videoUrl.startsWith("data:") ? c.videoUrl : "",
         screenshotUrl: compressedShot,
-        rawScreenshot: compressedShot,
-        audioUrl: c.audioUrl || "",
+        rawScreenshot: "", // Do not duplicate image data
+        audioUrl: "", // Offloaded to subcollection / regenerated on the fly
+        hasAudio: !!(c.audioUrl && c.audioUrl.length > 100),
+        screenshotIndex: shotIndex,
         status: c.status || "ready"
       };
     })
   );
 
-  // 2. Process scenes (if provided)
+  // 3. Process scenes (if provided)
   const rawScenes = session.scenes || [];
-  const processedScenes = rawScenes.map((s: any, index: number) => ({
-    id: s.id || `scene_${index}`,
-    timestamp: s.timestamp || `0:${(index * 15).toString().padStart(2, '0')}`,
-    duration: s.duration || 15,
-    visualPrompt: s.visualPrompt || s.title || `Slide ${index + 1}`,
-    narration: s.narration || "",
-    videoUrl: s.videoUrl || "",
-    audioUrl: s.audioUrl || "",
-    screenshotIndex: s.screenshotIndex !== undefined ? s.screenshotIndex : index,
-    status: s.status || "completed"
-  }));
+  const processedScenes = rawScenes.map((s: any, index: number) => {
+    const sceneShotIndex = s.screenshotIndex !== undefined ? s.screenshotIndex : index;
+    if (s.audioUrl && typeof s.audioUrl === 'string' && s.audioUrl.length > 100) {
+      const chunkId = s.id || `scene_${index}`;
+      audioChunksToSave.push({ id: chunkId, audioBase64: s.audioUrl });
+    }
 
-  // 3. Process screenshots (if provided)
-  const rawScreenshots = session.screenshots || [];
-  const processedScreenshots = await Promise.all(
-    rawScreenshots.map(async (shot: string) => {
-      if (shot?.startsWith("data:image")) {
-        return await compressImageForStorage(shot);
-      }
-      return shot || "";
-    })
-  );
+    return {
+      id: s.id || `scene_${index}`,
+      timestamp: s.timestamp || `0:${(index * 15).toString().padStart(2, '0')}`,
+      duration: s.duration || 15,
+      visualPrompt: s.visualPrompt || s.title || `Slide ${index + 1}`,
+      narration: s.narration || "",
+      videoUrl: s.videoUrl && !s.videoUrl.startsWith("blob:") && !s.videoUrl.startsWith("data:") ? s.videoUrl : "",
+      audioUrl: "", // Offloaded to subcollection
+      hasAudio: !!(s.audioUrl && s.audioUrl.length > 100),
+      screenshotIndex: sceneShotIndex,
+      status: s.status || "completed"
+    };
+  });
 
   const totalDuration = session.totalDuration || processedClips.reduce((sum, c) => sum + (c.duration || 0), 0) || (processedScenes.length * 15);
   const clipsCount = Math.max(processedClips.length, processedScenes.length, processedScreenshots.length, session.clipsCount || 0);
@@ -265,7 +314,12 @@ export async function saveUserSession(
   const effectiveSessionName = session.sessionName?.trim() || session.title?.trim() || "TourGenie Session";
   const effectiveProjectName = session.projectName?.trim() || "Default Project";
 
-  const cleanSessionData: SavedProjectSession = {
+  // Sanitize combinedVideoUrl: never store blob URLs or massive base64 video in Firestore
+  const safeCombinedVideoUrl = session.combinedVideoUrl && !session.combinedVideoUrl.startsWith("blob:") && !session.combinedVideoUrl.startsWith("data:")
+    ? session.combinedVideoUrl
+    : "";
+
+  let cleanSessionData: SavedProjectSession = {
     id: sessionId,
     userId,
     ownerEmail: currentUser?.email || session.ownerEmail || "",
@@ -279,7 +333,7 @@ export async function saveUserSession(
     clipsCount,
     totalDuration,
     isRendered: !!session.isRendered,
-    combinedVideoUrl: session.combinedVideoUrl || "",
+    combinedVideoUrl: safeCombinedVideoUrl,
     youtubeMetadata: session.youtubeMetadata || null,
     sharedWithEmails: session.sharedWithEmails || [],
     sharedWithUids: session.sharedWithUids || [],
@@ -290,14 +344,61 @@ export async function saveUserSession(
     updatedAt: serverTimestamp()
   };
 
+  // 4. Strict Document Size Guard (Firestore max: 1,048,576 bytes)
+  let estimatedBytes = new Blob([JSON.stringify(cleanSessionData)]).size;
+  if (estimatedBytes > 750_000) {
+    console.warn(`[TourGenie] Session size ${estimatedBytes} bytes approaches 1MB limit. Running high-efficiency compression...`);
+    // Re-compress screenshots aggressively (480px, 0.42 quality)
+    cleanSessionData.screenshots = await Promise.all(
+      cleanSessionData.screenshots.map(shot => 
+        shot?.startsWith("data:image") ? compressImageForStorage(shot, 480, 0.42) : shot
+      )
+    );
+    // Remove any per-clip screenshotUrl strings, letting them reference screenshots array
+    cleanSessionData.clips = cleanSessionData.clips.map(c => ({
+      ...c,
+      screenshotUrl: "",
+      previewUrl: ""
+    }));
+    estimatedBytes = new Blob([JSON.stringify(cleanSessionData)]).size;
+    console.log(`[TourGenie] Reduced session size to ${estimatedBytes} bytes.`);
+  }
+
   try {
-    // Save to shared top-level collection
+    // Save clean root session document
     const globalSessionRef = doc(db, "sessions", sessionId);
     await setDoc(globalSessionRef, cleanSessionData, { merge: true });
 
-    // Also mirror to user subcollection for fast local retrieval
+    // Mirror to user subcollection
     const userSessionRef = doc(db, "users", userId, "sessions", sessionId);
     await setDoc(userSessionRef, cleanSessionData, { merge: true });
+
+    // 5. Save heavy audio chunks to audio subcollections in parallel (non-blocking)
+    if (audioChunksToSave.length > 0) {
+      Promise.allSettled(
+        audioChunksToSave.map(async (chunk) => {
+          try {
+            const audioDocRef = doc(db, "sessions", sessionId, "audio", chunk.id);
+            await setDoc(audioDocRef, {
+              clipId: chunk.id,
+              audioBase64: chunk.audioBase64,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+
+            if (userId) {
+              const userAudioDocRef = doc(db, "users", userId, "sessions", sessionId, "audio", chunk.id);
+              await setDoc(userAudioDocRef, {
+                clipId: chunk.id,
+                audioBase64: chunk.audioBase64,
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+            }
+          } catch (audioErr) {
+            console.warn(`Could not save audio chunk ${chunk.id}:`, audioErr);
+          }
+        })
+      ).catch(() => {});
+    }
 
     return sessionId;
   } catch (error) {
@@ -394,6 +495,34 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
     const snap = await getDoc(sessionRef);
     if (snap.exists()) {
       const data = snap.data() as SavedProjectSession;
+      
+      // Load any audio chunks saved in the subcollection in parallel
+      try {
+        const audioMap = await getSessionAudio(sessionId);
+        if (data.clips && Array.isArray(data.clips)) {
+          data.clips = data.clips.map((c, idx) => {
+            const audio = audioMap[c.id] || audioMap[`clip_${idx}`] || c.audioUrl || "";
+            const shotIndex = c.screenshotIndex !== undefined ? c.screenshotIndex : idx;
+            const shot = c.screenshotUrl || data.screenshots?.[shotIndex] || "";
+            return { 
+              ...c, 
+              audioUrl: audio,
+              screenshotUrl: shot,
+              previewUrl: c.previewUrl || shot,
+              rawScreenshot: c.rawScreenshot || shot
+            };
+          });
+        }
+        if (data.scenes && Array.isArray(data.scenes)) {
+          data.scenes = data.scenes.map((s, idx) => {
+            const audio = audioMap[s.id] || audioMap[`scene_${idx}`] || audioMap[s.id?.replace('scene_', 'clip_')] || s.audioUrl || "";
+            return { ...s, audioUrl: audio };
+          });
+        }
+      } catch (subcollectionErr) {
+        console.warn("[TourGenie] Could not load audio subcollection chunks:", subcollectionErr);
+      }
+
       return {
         ...data,
         id: data?.id || snap.id
@@ -539,6 +668,15 @@ export async function deleteUserSession(userId: string, sessionId: string): Prom
 
     const sessionRef = doc(db, "users", userId, "sessions", sessionId);
     await deleteDoc(sessionRef);
+
+    // Clean up audio subcollection documents in background
+    try {
+      const audioCol = collection(db, "sessions", sessionId, "audio");
+      const audioSnap = await getDocs(audioCol);
+      await Promise.allSettled(audioSnap.docs.map(d => deleteDoc(d.ref)));
+    } catch {
+      // Non-critical
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `sessions/${sessionId}`);
   }

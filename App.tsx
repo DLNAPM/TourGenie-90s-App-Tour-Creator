@@ -3,7 +3,7 @@ import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './typ
 import { TourService } from './services/geminiService';
 import { pcmBase64ToWavBlob, stitchClipsClientSide } from './services/screenStudioEngine';
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { auth, logoutUser, saveUserSession, getUserSessions, getSessionById, SavedProjectSession } from './services/firebase';
+import { auth, logoutUser, saveUserSession, getUserSessions, getSessionById, getSessionAudio, SavedProjectSession } from './services/firebase';
 import { AuthModal } from './components/AuthModal';
 import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { SaveSessionDialog } from './components/SaveSessionDialog';
@@ -376,7 +376,8 @@ export default function App() {
     let restoredClips: EditorClip[] = [];
     if (session.clips && session.clips.length > 0) {
       restoredClips = session.clips.map((c: any, index: number) => {
-        const shot = c?.screenshotUrl || c?.rawScreenshot || (restoredScreenshots[index] || '');
+        const shotIndex = c?.screenshotIndex !== undefined ? c.screenshotIndex : index;
+        const shot = c?.screenshotUrl || c?.rawScreenshot || (restoredScreenshots[shotIndex] || restoredScreenshots[index] || '');
         return {
           id: c?.id || `restored_clip_${index}_${Date.now()}`,
           duration: c?.duration || 15,
@@ -427,17 +428,21 @@ export default function App() {
     // 3. Restore scenes for Tour Creator storyboard
     let restoredScenes: Scene[] = [];
     if (session.scenes && session.scenes.length > 0) {
-      restoredScenes = session.scenes.map((s: any, index: number) => ({
-        id: s.id || `restored_scene_${index}`,
-        timestamp: s.timestamp || `0:${(index * 15).toString().padStart(2, '0')}`,
-        duration: s.duration || 15,
-        visualPrompt: s.visualPrompt || `Slide ${index + 1}`,
-        narration: s.narration || '',
-        videoUrl: s.videoUrl || '',
-        audioUrl: s.audioUrl || '',
-        status: (s.status as any) || 'completed',
-        screenshotIndex: s.screenshotIndex !== undefined ? s.screenshotIndex : index
-      }));
+      restoredScenes = session.scenes.map((s: any, index: number) => {
+        const shotIndex = s.screenshotIndex !== undefined ? s.screenshotIndex : index;
+        const shot = restoredScreenshots[shotIndex] || restoredScreenshots[index] || '';
+        return {
+          id: s.id || `restored_scene_${index}`,
+          timestamp: s.timestamp || `0:${(index * 15).toString().padStart(2, '0')}`,
+          duration: s.duration || 15,
+          visualPrompt: s.visualPrompt || `Slide ${index + 1}`,
+          narration: s.narration || '',
+          videoUrl: s.videoUrl || shot || '',
+          audioUrl: s.audioUrl || '',
+          status: (s.status as any) || 'completed',
+          screenshotIndex: shotIndex
+        };
+      });
     } else if (restoredClips.length > 0) {
       // Synthesize scenes from restored clips so the storyboard is also complete
       restoredScenes = restoredClips.map((c, index) => ({
@@ -467,7 +472,29 @@ export default function App() {
       });
     }
 
-    // 4. Tab navigation & user feedback
+    // 4. Background rehydration of audio subcollection
+    if (sessionId) {
+      getSessionAudio(sessionId).then((audioMap) => {
+        if (audioMap && Object.keys(audioMap).length > 0) {
+          setEditorState((prev) => ({
+            ...prev,
+            clips: prev.clips.map((c, idx) => ({
+              ...c,
+              audioUrl: c.audioUrl || audioMap[c.id] || audioMap[`clip_${idx}`] || ''
+            }))
+          }));
+          setState((prev) => ({
+            ...prev,
+            scenes: prev.scenes.map((s, idx) => ({
+              ...s,
+              audioUrl: s.audioUrl || audioMap[s.id] || audioMap[`scene_${idx}`] || audioMap[s.id?.replace('scene_', 'clip_')] || ''
+            }))
+          }));
+        }
+      }).catch((e) => console.warn('[TourGenie] Async audio fetch non-fatal:', e));
+    }
+
+    // 5. Tab navigation & user feedback
     if (restoredClips.length > 0) {
       setActiveTab('editor');
       setQuickSaveFeedback(`Loaded ${restoredClips.length} slides from "${session.title || 'Tour'}"`);
@@ -508,28 +535,53 @@ export default function App() {
   };
 
   // --- Audio Helpers ---
-  const playAudioPreview = (audioBase64?: string) => {
-    if (!audioBase64) {
+  const playAudioPreview = async (audioBase64?: string, narrationText?: string, onGenerated?: (audio: string) => void) => {
+    let audio = audioBase64;
+    if (!audio && narrationText?.trim()) {
+      try {
+        setQuickSaveFeedback("Generating voiceover audio...");
+        audio = await tourService.generateNarration(narrationText);
+        if (onGenerated && audio) {
+          onGenerated(audio);
+        }
+        setTimeout(() => setQuickSaveFeedback(null), 1500);
+      } catch (synthErr) {
+        console.warn("Could not generate voiceover audio on the fly:", synthErr);
+      }
+    }
+
+    if (!audio) {
       setError("No voiceover audio available for this scene.");
       return;
     }
     try {
-      const blob = pcmBase64ToWavBlob(audioBase64);
+      const blob = pcmBase64ToWavBlob(audio);
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.play().catch(e => console.warn("Audio playback failed:", e));
+      const audioEl = new Audio(url);
+      audioEl.play().catch(e => console.warn("Audio playback failed:", e));
     } catch (err) {
       console.error("Failed to play audio:", err);
     }
   };
 
-  const downloadAudio = (audioBase64?: string, sceneIndex: number = 0) => {
-    if (!audioBase64) {
+  const downloadAudio = async (audioBase64?: string, sceneIndex: number = 0, narrationText?: string) => {
+    let audio = audioBase64;
+    if (!audio && narrationText?.trim()) {
+      try {
+        setQuickSaveFeedback("Generating audio file...");
+        audio = await tourService.generateNarration(narrationText);
+        setTimeout(() => setQuickSaveFeedback(null), 1500);
+      } catch (synthErr) {
+        console.warn("Could not generate audio on the fly:", synthErr);
+      }
+    }
+
+    if (!audio) {
       setError("No voiceover audio available for this scene.");
       return;
     }
     try {
-      const blob = pcmBase64ToWavBlob(audioBase64);
+      const blob = pcmBase64ToWavBlob(audio);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -1337,13 +1389,18 @@ export default function App() {
                         {/* Audio controls */}
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => playAudioPreview(scene.audioUrl)}
+                            onClick={() => playAudioPreview(scene.audioUrl, scene.narration, (gen) => {
+                              setState(prev => ({
+                                ...prev,
+                                scenes: prev.scenes.map((s, i) => i === idx ? { ...s, audioUrl: gen } : s)
+                              }));
+                            })}
                             className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition"
                           >
                             <SpeakerWaveIcon className="w-3.5 h-3.5 text-indigo-600" /> Play Voiceover
                           </button>
                           <button
-                            onClick={() => downloadAudio(scene.audioUrl, idx)}
+                            onClick={() => downloadAudio(scene.audioUrl, idx, scene.narration)}
                             className="flex-1 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition"
                           >
                             <ArrowDownTrayIcon className="w-3.5 h-3.5 text-slate-500" /> Audio WAV
@@ -1802,11 +1859,16 @@ export default function App() {
                                 {clip.previewUrl && (clip.previewUrl.startsWith('data:image') || clip.previewUrl.endsWith('.png') || clip.previewUrl.endsWith('.jpg') || clip.previewUrl.endsWith('.jpeg') || clip.previewUrl.endsWith('.webp')) ? (
                                   <div className="w-full h-full flex flex-col items-center justify-center relative">
                                     <img src={clip.previewUrl} alt={clip.title || `Slide ${idx + 1}`} className="w-full h-full object-contain" />
-                                    {clip.audioUrl && (
+                                    {(clip.audioUrl || clip.narration) && (
                                       <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-700/60 flex items-center justify-between gap-3 z-20">
                                         <span className="text-xs text-slate-300 truncate font-medium">Slide {idx + 1} Voiceover</span>
                                         <button
-                                          onClick={() => playAudioPreview(clip.audioUrl)}
+                                          onClick={() => playAudioPreview(clip.audioUrl, clip.narration, (gen) => {
+                                            setEditorState(prev => ({
+                                              ...prev,
+                                              clips: prev.clips.map((c, i) => i === idx ? { ...c, audioUrl: gen } : c)
+                                            }));
+                                          })}
                                           className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5"
                                         >
                                           <SpeakerWaveIcon className="w-3.5 h-3.5" /> Play Voiceover

@@ -5,8 +5,8 @@
 
 export async function compressImageForStorage(
   dataUrl: string,
-  maxDimension = 960,
-  quality = 0.72
+  maxDimension = 640,
+  quality = 0.58
 ): Promise<string> {
   if (!dataUrl) return "";
 
@@ -15,8 +15,8 @@ export async function compressImageForStorage(
     return dataUrl;
   }
 
-  // If already small (< 65KB base64), no need to compress further
-  if (dataUrl.length < 85_000) {
+  // If already small (< 30KB base64), no need to compress further
+  if (dataUrl.length < 35_000) {
     return dataUrl;
   }
 

@@ -41,6 +41,17 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last modified timestamp" }
       },
       "required": ["id", "userId", "title"]
+    },
+    "SessionAudioChunk": {
+      "title": "SessionAudioChunk",
+      "description": "Voiceover narration audio segment stored in subcollection to stay within Firestore 1MB document limit",
+      "type": "object",
+      "properties": {
+        "clipId": { "type": "string", "description": "ID of the associated scene or clip" },
+        "audioBase64": { "type": "string", "description": "Base64-encoded narration audio data" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Audio upload timestamp" }
+      },
+      "required": ["clipId", "audioBase64"]
     }
   },
   "firestore": {
@@ -52,9 +63,17 @@
       "schema": "TourSession",
       "description": "Private user sessions subcollection"
     },
+    "/users/{userId}/sessions/{sessionId}/audio/{audioId}": {
+      "schema": "SessionAudioChunk",
+      "description": "Private voiceover narration audio subcollection"
+    },
     "/sessions/{sessionId}": {
       "schema": "TourSession",
       "description": "Top-level tour sessions collection supporting sharing across users"
+    },
+    "/sessions/{sessionId}/audio/{audioId}": {
+      "schema": "SessionAudioChunk",
+      "description": "Shared voiceover narration audio subcollection"
     }
   }
 }
