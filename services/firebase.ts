@@ -201,18 +201,55 @@ export async function logoutUser(): Promise<void> {
 }
 
 // Session Persistence Helpers
-export async function getSessionAudio(sessionId: string): Promise<Record<string, string>> {
+export async function getSessionAudio(sessionId: string, userId?: string): Promise<Record<string, string>> {
   try {
     const audioCol = collection(db, "sessions", sessionId, "audio");
-    const snap = await getDocs(audioCol);
-    const map: Record<string, string> = {};
+    let snap = await getDocs(audioCol);
+    if (snap.empty && userId) {
+      try {
+        const userAudioCol = collection(db, "users", userId, "sessions", sessionId, "audio");
+        snap = await getDocs(userAudioCol);
+      } catch (userAudioErr) {
+        console.warn("Could not fetch user audio subcollection:", userAudioErr);
+      }
+    }
+
+    const partsMap: Record<string, { totalParts: number; parts: string[] }> = {};
+    const directMap: Record<string, string> = {};
+
     snap.forEach((d) => {
       const data = d.data();
-      if (data?.audioBase64) {
-        map[d.id] = data.audioBase64;
+      const rawDocId = d.id;
+      // Strip part suffix if present (e.g. scene-0__p0 -> scene-0)
+      const clipId = data?.clipId || rawDocId.replace(/__p\d+$/, "");
+
+      if (typeof data?.data === 'string') {
+        const total = typeof data.totalParts === 'number' ? data.totalParts : 1;
+        const partIdx = typeof data.partIndex === 'number' ? data.partIndex : 0;
+        if (!partsMap[clipId]) {
+          partsMap[clipId] = { totalParts: total, parts: [] };
+        }
+        partsMap[clipId].parts[partIdx] = data.data;
+      } else if (typeof data?.audioBase64 === 'string') {
+        directMap[clipId] = data.audioBase64;
       }
     });
-    return map;
+
+    const resultMap: Record<string, string> = { ...directMap };
+    for (const [clipId, info] of Object.entries(partsMap)) {
+      if (info.parts.length > 0) {
+        const assembled = info.parts.filter(Boolean).join("");
+        resultMap[clipId] = assembled;
+        // Also map interchangeable hyphen/underscore variants
+        if (clipId.includes('-')) {
+          resultMap[clipId.replace(/-/g, '_')] = assembled;
+        }
+        if (clipId.includes('_')) {
+          resultMap[clipId.replace(/_/g, '-')] = assembled;
+        }
+      }
+    }
+    return resultMap;
   } catch (err) {
     console.warn("Could not fetch session audio chunks:", err);
     return {};
@@ -238,7 +275,8 @@ export async function saveUserSession(
   );
 
   // 2. Offload heavy audio (raw PCM TTS can be 1MB+ per clip) into audio subcollection documents
-  // Each subcollection doc gets its own 1MB limit, keeping the main session doc tiny (~100KB)
+  // Chunking audio into <=400KB parts guarantees every document is strictly under Firestore's 1,048,576 byte limit
+  const seenChunkIds = new Set<string>();
   const audioChunksToSave: Array<{ id: string; audioBase64: string }> = [];
 
   // Process clips: deduplicate images and strip bulky ephemeral data
@@ -260,7 +298,10 @@ export async function saveUserSession(
       // Collect audio chunk for dedicated subcollection storage
       if (c.audioUrl && typeof c.audioUrl === 'string' && c.audioUrl.length > 100) {
         const chunkId = c.id || `clip_${index}`;
-        audioChunksToSave.push({ id: chunkId, audioBase64: c.audioUrl });
+        if (!seenChunkIds.has(chunkId)) {
+          seenChunkIds.add(chunkId);
+          audioChunksToSave.push({ id: chunkId, audioBase64: c.audioUrl });
+        }
       }
 
       return {
@@ -291,7 +332,10 @@ export async function saveUserSession(
     const sceneShotIndex = s.screenshotIndex !== undefined ? s.screenshotIndex : index;
     if (s.audioUrl && typeof s.audioUrl === 'string' && s.audioUrl.length > 100) {
       const chunkId = s.id || `scene_${index}`;
-      audioChunksToSave.push({ id: chunkId, audioBase64: s.audioUrl });
+      if (!seenChunkIds.has(chunkId)) {
+        seenChunkIds.add(chunkId);
+        audioChunksToSave.push({ id: chunkId, audioBase64: s.audioUrl });
+      }
     }
 
     return {
@@ -374,24 +418,71 @@ export async function saveUserSession(
     await setDoc(userSessionRef, cleanSessionData, { merge: true });
 
     // 5. Save heavy audio chunks to audio subcollections in parallel (non-blocking)
+    // Audio chunks > 400KB are automatically split into part documents (__p0, __p1...) to strictly respect Firestore's 1MB limit
     if (audioChunksToSave.length > 0) {
+      const MAX_AUDIO_PART_SIZE = 400_000; // 400KB per document - strictly under 1,048,576 byte limit
       Promise.allSettled(
         audioChunksToSave.map(async (chunk) => {
           try {
-            const audioDocRef = doc(db, "sessions", sessionId, "audio", chunk.id);
-            await setDoc(audioDocRef, {
-              clipId: chunk.id,
-              audioBase64: chunk.audioBase64,
-              updatedAt: serverTimestamp()
-            }, { merge: true });
+            const rawAudio = chunk.audioBase64;
+            if (!rawAudio) return;
 
-            if (userId) {
-              const userAudioDocRef = doc(db, "users", userId, "sessions", sessionId, "audio", chunk.id);
-              await setDoc(userAudioDocRef, {
+            if (rawAudio.length <= MAX_AUDIO_PART_SIZE) {
+              const audioDocRef = doc(db, "sessions", sessionId, "audio", chunk.id);
+              await setDoc(audioDocRef, {
                 clipId: chunk.id,
-                audioBase64: chunk.audioBase64,
+                partIndex: 0,
+                totalParts: 1,
+                data: rawAudio,
+                audioBase64: rawAudio,
                 updatedAt: serverTimestamp()
               }, { merge: true });
+
+              if (userId) {
+                const userAudioDocRef = doc(db, "users", userId, "sessions", sessionId, "audio", chunk.id);
+                await setDoc(userAudioDocRef, {
+                  clipId: chunk.id,
+                  partIndex: 0,
+                  totalParts: 1,
+                  data: rawAudio,
+                  audioBase64: rawAudio,
+                  updatedAt: serverTimestamp()
+                }, { merge: true });
+              }
+            } else {
+              const totalParts = Math.ceil(rawAudio.length / MAX_AUDIO_PART_SIZE);
+              const partWrites: Promise<any>[] = [];
+
+              for (let p = 0; p < totalParts; p++) {
+                const partSlice = rawAudio.slice(p * MAX_AUDIO_PART_SIZE, (p + 1) * MAX_AUDIO_PART_SIZE);
+                const partDocId = `${chunk.id}__p${p}`;
+
+                const audioDocRef = doc(db, "sessions", sessionId, "audio", partDocId);
+                partWrites.push(
+                  setDoc(audioDocRef, {
+                    clipId: chunk.id,
+                    partIndex: p,
+                    totalParts,
+                    data: partSlice,
+                    updatedAt: serverTimestamp()
+                  }, { merge: true })
+                );
+
+                if (userId) {
+                  const userAudioDocRef = doc(db, "users", userId, "sessions", sessionId, "audio", partDocId);
+                  partWrites.push(
+                    setDoc(userAudioDocRef, {
+                      clipId: chunk.id,
+                      partIndex: p,
+                      totalParts,
+                      data: partSlice,
+                      updatedAt: serverTimestamp()
+                    }, { merge: true })
+                  );
+                }
+              }
+
+              await Promise.all(partWrites);
             }
           } catch (audioErr) {
             console.warn(`Could not save audio chunk ${chunk.id}:`, audioErr);
@@ -498,10 +589,10 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
       
       // Load any audio chunks saved in the subcollection in parallel
       try {
-        const audioMap = await getSessionAudio(sessionId);
+        const audioMap = await getSessionAudio(sessionId, data.userId);
         if (data.clips && Array.isArray(data.clips)) {
           data.clips = data.clips.map((c, idx) => {
-            const audio = audioMap[c.id] || audioMap[`clip_${idx}`] || c.audioUrl || "";
+            const audio = audioMap[c.id] || audioMap[`clip_${idx}`] || audioMap[`scene_${idx}`] || audioMap[`scene-${idx}`] || c.audioUrl || "";
             const shotIndex = c.screenshotIndex !== undefined ? c.screenshotIndex : idx;
             const shot = c.screenshotUrl || data.screenshots?.[shotIndex] || "";
             return { 
@@ -515,7 +606,7 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
         }
         if (data.scenes && Array.isArray(data.scenes)) {
           data.scenes = data.scenes.map((s, idx) => {
-            const audio = audioMap[s.id] || audioMap[`scene_${idx}`] || audioMap[s.id?.replace('scene_', 'clip_')] || s.audioUrl || "";
+            const audio = audioMap[s.id] || audioMap[`scene_${idx}`] || audioMap[`scene-${idx}`] || audioMap[`clip_${idx}`] || audioMap[s.id?.replace('scene_', 'clip_')] || audioMap[s.id?.replace('scene-', 'clip-')] || s.audioUrl || "";
             return { ...s, audioUrl: audio };
           });
         }
@@ -676,6 +767,16 @@ export async function deleteUserSession(userId: string, sessionId: string): Prom
       await Promise.allSettled(audioSnap.docs.map(d => deleteDoc(d.ref)));
     } catch {
       // Non-critical
+    }
+
+    if (userId) {
+      try {
+        const userAudioCol = collection(db, "users", userId, "sessions", sessionId, "audio");
+        const userAudioSnap = await getDocs(userAudioCol);
+        await Promise.allSettled(userAudioSnap.docs.map(d => deleteDoc(d.ref)));
+      } catch {
+        // Non-critical
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `sessions/${sessionId}`);

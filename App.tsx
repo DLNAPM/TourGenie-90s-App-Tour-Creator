@@ -474,20 +474,20 @@ export default function App() {
 
     // 4. Background rehydration of audio subcollection
     if (sessionId) {
-      getSessionAudio(sessionId).then((audioMap) => {
+      getSessionAudio(sessionId, session.userId || currentUser?.uid).then((audioMap) => {
         if (audioMap && Object.keys(audioMap).length > 0) {
           setEditorState((prev) => ({
             ...prev,
             clips: prev.clips.map((c, idx) => ({
               ...c,
-              audioUrl: c.audioUrl || audioMap[c.id] || audioMap[`clip_${idx}`] || ''
+              audioUrl: c.audioUrl || audioMap[c.id] || audioMap[`clip_${idx}`] || audioMap[`scene_${idx}`] || audioMap[`scene-${idx}`] || ''
             }))
           }));
           setState((prev) => ({
             ...prev,
             scenes: prev.scenes.map((s, idx) => ({
               ...s,
-              audioUrl: s.audioUrl || audioMap[s.id] || audioMap[`scene_${idx}`] || audioMap[s.id?.replace('scene_', 'clip_')] || ''
+              audioUrl: s.audioUrl || audioMap[s.id] || audioMap[`scene_${idx}`] || audioMap[`scene-${idx}`] || audioMap[`clip_${idx}`] || audioMap[s.id?.replace('scene_', 'clip_')] || audioMap[s.id?.replace('scene-', 'clip-')] || ''
             }))
           }));
         }

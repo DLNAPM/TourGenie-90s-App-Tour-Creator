@@ -44,14 +44,17 @@
     },
     "SessionAudioChunk": {
       "title": "SessionAudioChunk",
-      "description": "Voiceover narration audio segment stored in subcollection to stay within Firestore 1MB document limit",
+      "description": "Voiceover narration audio segment stored in subcollection with part chunking under 400KB to stay strictly within Firestore 1MB document limit",
       "type": "object",
       "properties": {
         "clipId": { "type": "string", "description": "ID of the associated scene or clip" },
-        "audioBase64": { "type": "string", "description": "Base64-encoded narration audio data" },
+        "data": { "type": "string", "description": "Base64-encoded narration audio data or part slice" },
+        "audioBase64": { "type": "string", "description": "Legacy full Base64-encoded audio (when <= 400KB)" },
+        "partIndex": { "type": "number", "description": "Zero-indexed slice order of the audio chunk" },
+        "totalParts": { "type": "number", "description": "Total count of part slices for the audio chunk" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Audio upload timestamp" }
       },
-      "required": ["clipId", "audioBase64"]
+      "required": ["clipId"]
     }
   },
   "firestore": {
