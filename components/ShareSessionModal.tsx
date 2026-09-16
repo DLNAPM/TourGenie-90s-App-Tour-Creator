@@ -3,7 +3,8 @@ import {
   SavedProjectSession, 
   shareSessionWithEmail, 
   unshareSessionWithEmail, 
-  toggleSessionPublicAccess 
+  toggleSessionPublicAccess,
+  getCloudQuotaExceeded 
 } from "../services/firebase";
 import { 
   XMarkIcon, 
@@ -15,7 +16,8 @@ import {
   TrashIcon,
   SparklesIcon,
   ShieldCheckIcon,
-  EnvelopeIcon
+  EnvelopeIcon,
+  ArrowDownTrayIcon
 } from "@heroicons/react/24/outline";
 
 interface ShareSessionModalProps {
@@ -42,6 +44,7 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
 
   const sharedEmails = session.sharedWithEmails || [];
   const isPublic = !!session.isPublic;
+  const isQuotaReached = getCloudQuotaExceeded();
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,15 +65,19 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
 
     setIsInviting(true);
     try {
-      await shareSessionWithEmail(session.id, cleanEmail, session);
+      const res = await shareSessionWithEmail(session.id, cleanEmail, session);
       const updated = {
         ...session,
         sharedWithEmails: [...sharedEmails, cleanEmail]
       };
       onSessionUpdated(updated);
       setInviteEmail("");
-      setSuccessMsg(`Access granted to ${cleanEmail}`);
-      setTimeout(() => setSuccessMsg(null), 3500);
+      if (res && res.message) {
+        setSuccessMsg(res.message);
+      } else {
+        setSuccessMsg(`Access granted to ${cleanEmail}`);
+      }
+      setTimeout(() => setSuccessMsg(null), 4500);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to share tour with user.");
     } finally {
@@ -98,13 +105,17 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
     const nextState = !isPublic;
     setErrorMsg(null);
     try {
-      await toggleSessionPublicAccess(session.id, nextState, session);
+      const res = await toggleSessionPublicAccess(session.id, nextState, session);
       const updated = {
         ...session,
         isPublic: nextState
       };
       onSessionUpdated(updated);
-      setSuccessMsg(nextState ? "Tour is now discoverable in the Community tab" : "Tour is now private to invited users");
+      if (res && res.message) {
+        setSuccessMsg(res.message);
+      } else {
+        setSuccessMsg(nextState ? "Tour is now discoverable in the Community tab" : "Tour is now private to invited users");
+      }
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: any) {
       setErrorMsg("Failed to update visibility settings.");
@@ -122,6 +133,31 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
     navigator.clipboard.writeText(shareUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  const handleDownloadTourFile = () => {
+    try {
+      const exportData = {
+        ...session,
+        exportedAt: new Date().toISOString(),
+        tourGenieVersion: "2.0"
+      };
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safeTitle = (session.sessionName || session.title || "TourGenie_Tour").replace(/[^a-zA-Z0-9_-]/g, "_");
+      a.download = `${safeTitle}.tourgenie`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSuccessMsg("Tour project file (.tourgenie) downloaded! Teammates can load this anytime.");
+      setTimeout(() => setSuccessMsg(null), 3500);
+    } catch (err: any) {
+      setErrorMsg("Could not download tour file: " + err.message);
+    }
   };
 
   return (
@@ -151,67 +187,85 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
           </button>
         </div>
 
+        {/* Cloud Quota Status Notice */}
+        {isQuotaReached && (
+          <div className="mt-4 p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5">
+            <div className="px-1.5 py-0.5 rounded bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200 font-black text-[9px] uppercase tracking-wider shrink-0 mt-0.5">
+              Cloud Quota
+            </div>
+            <div className="space-y-1">
+              <p className="font-bold text-amber-900 dark:text-amber-100 text-xs">
+                Free-tier daily write limit reached for cloud database
+              </p>
+              <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
+                Your tour session is safely preserved in local storage. You can invite collaborators, send them the <strong>Direct Link / Code</strong>, or download the <strong>.tourgenie file</strong> below.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Feedback notices */}
         {errorMsg && (
-          <div className="mt-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-700 animate-in fade-in">
+          <div className="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300 animate-in fade-in">
             {errorMsg}
           </div>
         )}
         {successMsg && (
-          <div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700 flex items-center gap-1.5 animate-in fade-in">
-            <ShieldCheckIcon className="w-4 h-4 text-emerald-600" />
+          <div className="mt-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-2 animate-in fade-in">
+            <CheckIcon className="w-4 h-4 shrink-0" />
             {successMsg}
           </div>
         )}
 
-        <div className="mt-6 space-y-6 overflow-y-auto pr-1 flex-1">
+        {/* Content body */}
+        <div className="mt-5 space-y-6 overflow-y-auto pr-1">
           
-          {/* Option 1: Direct Invite by User Email */}
+          {/* Option 1: Invite Collaborator */}
           <div className="space-y-3">
             <label className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
               <UserPlusIcon className="w-4 h-4 text-indigo-600" />
-              Invite Specific App User by Email
+              Invite Team Member / Collaborator
             </label>
             <form onSubmit={handleInvite} className="flex gap-2">
               <div className="relative flex-1">
-                <EnvelopeIcon className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
-                <input
+                <EnvelopeIcon className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input 
                   type="email"
-                  placeholder="colleague@example.com"
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
-                  className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-white"
+                  placeholder="colleague@company.com"
+                  className="w-full pl-10 pr-3 py-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
                 />
               </div>
               <button
                 type="submit"
                 disabled={isInviting || !inviteEmail.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow transition active:scale-95 whitespace-nowrap"
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm"
               >
-                {isInviting ? "Adding..." : "Grant Access"}
+                {isInviting ? "Inviting..." : "Grant Access"}
               </button>
             </form>
-            <p className="text-[11px] text-slate-400 dark:text-slate-500">
-              When this user logs in with their email, this tour will automatically appear under their <strong>"Shared with Me"</strong> tab.
-            </p>
 
-            {/* List of currently invited users */}
+            {/* List of currently shared users */}
             {sharedEmails.length > 0 && (
-              <div className="mt-3 p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/60 space-y-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  Shared Collaborators ({sharedEmails.length})
+              <div className="mt-3 space-y-1.5">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  People with access ({sharedEmails.length})
                 </span>
-                <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                <div className="max-h-28 overflow-y-auto space-y-1">
                   {sharedEmails.map((email) => (
                     <div 
                       key={email}
-                      className="flex items-center justify-between px-2.5 py-1.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200/80 dark:border-slate-700/80 text-xs"
+                      className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-xs"
                     >
-                      <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">{email}</span>
+                      <span className="text-slate-700 dark:text-slate-300 font-medium truncate max-w-[280px]">
+                        {email}
+                      </span>
                       <button
+                        type="button"
                         onClick={() => handleRemoveUser(email)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded transition"
-                        title="Revoke access"
+                        className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+                        title="Remove user"
                       >
                         <TrashIcon className="w-3.5 h-3.5" />
                       </button>
@@ -252,25 +306,25 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
             </button>
           </div>
 
-          {/* Option 3: Share Session Code & Direct Link */}
+          {/* Option 3: Share Session Code, Direct Link & File Export */}
           <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
             <label className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
               <LinkIcon className="w-4 h-4 text-indigo-600" />
-              Direct Share Code & Link
+              Direct Share Code, Link & File
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={handleCopyCode}
-                className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 text-left transition flex items-center justify-between"
+                className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 text-left transition flex flex-col justify-between"
               >
                 <div>
                   <div className="text-[10px] font-bold uppercase text-slate-400">Session ID Code</div>
-                  <div className="text-xs font-black text-slate-800 dark:text-slate-200 font-mono truncate max-w-[150px]">
+                  <div className="text-xs font-black text-slate-800 dark:text-slate-200 font-mono truncate max-w-[130px]">
                     {session.id}
                   </div>
                 </div>
-                <span className="text-xs font-bold text-indigo-600 flex items-center gap-1">
+                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1 mt-2">
                   {copiedCode ? <CheckIcon className="w-4 h-4 text-emerald-600" /> : <LinkIcon className="w-4 h-4" />}
                   {copiedCode ? "Copied" : "Copy Code"}
                 </span>
@@ -279,22 +333,39 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
               <button
                 type="button"
                 onClick={handleCopyLink}
-                className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 text-left transition flex items-center justify-between"
+                className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700/80 border border-slate-200 dark:border-slate-700 text-left transition flex flex-col justify-between"
               >
                 <div>
                   <div className="text-[10px] font-bold uppercase text-slate-400">Direct Share Link</div>
-                  <div className="text-xs font-black text-slate-800 dark:text-slate-200 truncate max-w-[150px]">
+                  <div className="text-xs font-black text-slate-800 dark:text-slate-200 truncate max-w-[130px]">
                     Load into Editor URL
                   </div>
                 </div>
-                <span className="text-xs font-bold text-indigo-600 flex items-center gap-1">
+                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1 mt-2">
                   {copiedLink ? <CheckIcon className="w-4 h-4 text-emerald-600" /> : <ShareIcon className="w-4 h-4" />}
                   {copiedLink ? "Copied" : "Copy Link"}
                 </span>
               </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadTourFile}
+                className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-800/80 text-left transition flex flex-col justify-between"
+              >
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-indigo-600 dark:text-indigo-400">Export File</div>
+                  <div className="text-xs font-black text-slate-800 dark:text-slate-200 truncate max-w-[130px]">
+                    .tourgenie file
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1 mt-2">
+                  <ArrowDownTrayIcon className="w-4 h-4" />
+                  Download
+                </span>
+              </button>
             </div>
             <p className="text-[11px] text-slate-400 dark:text-slate-500">
-              Users can also paste this Session ID code into the <strong>"Import via Code"</strong> box in the Saved Sessions modal.
+              Anyone can import this tour using the <strong>Session ID Code</strong> or by opening the <strong>.tourgenie file</strong> in their Saved Sessions.
             </p>
           </div>
 

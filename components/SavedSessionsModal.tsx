@@ -9,6 +9,7 @@ import {
   saveUserSession,
   duplicateSharedSessionToMyAccount,
   updateSessionOrganization,
+  saveLocalSession,
   auth
 } from "../services/firebase";
 import { ShareSessionModal } from "./ShareSessionModal";
@@ -34,7 +35,8 @@ import {
   ListBulletIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  CheckIcon
+  CheckIcon,
+  ArrowUpTrayIcon
 } from "@heroicons/react/24/outline";
 
 interface SavedSessionsModalProps {
@@ -304,6 +306,30 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
     } finally {
       setIsImporting(false);
     }
+  };
+
+  const handleImportByFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError(null);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        if (!parsed || (!parsed.clips && !parsed.scenes && !parsed.screenshots)) {
+          setImportError("Invalid tour file. Please select a valid .tourgenie or .json project file.");
+          return;
+        }
+        // Save to local cache
+        saveLocalSession(parsed);
+        onLoadSession(parsed);
+        onClose();
+      } catch (err: any) {
+        setImportError("Failed to parse tour file: " + err.message);
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleCloneToMyAccount = async (session: SavedProjectSession) => {
@@ -664,28 +690,44 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
             )}
           </form>
 
-          {/* Import by Session ID Bar */}
-          <form onSubmit={handleImportByCode} className="mt-3 p-3 bg-indigo-50/40 dark:bg-indigo-950/20 rounded-xl border border-indigo-100 dark:border-indigo-900/40 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-            <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 dark:text-indigo-300 whitespace-nowrap">
-              <KeyIcon className="w-4 h-4 text-indigo-600" />
-              Import Shared Tour:
-            </div>
-            <input
-              type="text"
-              placeholder="Paste Session ID (e.g. session_1726...)"
-              value={importCode}
-              onChange={(e) => setImportCode(e.target.value)}
-              className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-slate-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-white"
-            />
-            <button
-              type="submit"
-              disabled={isImporting || !importCode.trim()}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3 py-1.5 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1 whitespace-nowrap"
-            >
-              {isImporting ? <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" /> : <ArrowRightIcon className="w-3.5 h-3.5" />}
-              Import & Load
-            </button>
-          </form>
+          {/* Import by Session ID Bar & File Upload */}
+          <div className="mt-3 p-3 bg-indigo-50/40 dark:bg-indigo-950/20 rounded-xl border border-indigo-100 dark:border-indigo-900/40 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <form onSubmit={handleImportByCode} className="flex-1 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-indigo-700 dark:text-indigo-300 whitespace-nowrap">
+                <KeyIcon className="w-4 h-4 text-indigo-600" />
+                Import Shared Tour:
+              </div>
+              <input
+                type="text"
+                placeholder="Paste Session ID (e.g. session_1726...)"
+                value={importCode}
+                onChange={(e) => setImportCode(e.target.value)}
+                className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-slate-700 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-white"
+              />
+              <button
+                type="submit"
+                disabled={isImporting || !importCode.trim()}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3 py-1.5 rounded-lg shadow-sm transition active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1 whitespace-nowrap"
+              >
+                {isImporting ? <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" /> : <ArrowRightIcon className="w-3.5 h-3.5" />}
+                Import & Load
+              </button>
+            </form>
+
+            <div className="hidden sm:block w-px h-6 bg-slate-200 dark:bg-slate-700" />
+
+            {/* File Upload Button */}
+            <label className="cursor-pointer bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 text-indigo-600 dark:text-indigo-400 font-bold text-xs px-3 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 transition flex items-center justify-center gap-1.5 whitespace-nowrap shadow-sm">
+              <ArrowUpTrayIcon className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              Upload .tourgenie
+              <input
+                type="file"
+                accept=".tourgenie,.json"
+                onChange={handleImportByFile}
+                className="hidden"
+              />
+            </label>
+          </div>
           {importError && (
             <p className="text-xs font-semibold text-rose-600 mt-1 ml-1">{importError}</p>
           )}

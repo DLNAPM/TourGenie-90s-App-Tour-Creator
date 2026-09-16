@@ -69,9 +69,122 @@ export interface FirestoreErrorInfo {
   };
 }
 
+// Local Storage Fallback & Quota Management
+const LOCAL_STORAGE_KEY = "tourgenie_local_sessions_v1";
+
+let cloudQuotaExceeded = false;
+
+export function isQuotaError(error: unknown): boolean {
+  if (!error) return false;
+  const msg = error instanceof Error ? error.message : String(error);
+  const code = (error as any)?.code;
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('Write stream exhausted') ||
+    msg.includes('daily write units') ||
+    msg.includes('maximum allowed queued writes')
+  );
+}
+
+export function getCloudQuotaExceeded(): boolean {
+  return cloudQuotaExceeded || typeof sessionStorage !== 'undefined' && sessionStorage.getItem("tourgenie_cloud_quota_exceeded") === "true";
+}
+
+export function setCloudQuotaExceeded(val: boolean): void {
+  cloudQuotaExceeded = val;
+  if (typeof sessionStorage !== 'undefined') {
+    if (val) {
+      sessionStorage.setItem("tourgenie_cloud_quota_exceeded", "true");
+    } else {
+      sessionStorage.removeItem("tourgenie_cloud_quota_exceeded");
+    }
+  }
+}
+
+export function getLocalSessions(): SavedProjectSession[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn("Could not read local sessions:", e);
+    return [];
+  }
+}
+
+export function saveLocalSession(session: SavedProjectSession): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const sessions = getLocalSessions();
+    const idx = sessions.findIndex(s => s.id === session.id);
+    if (idx >= 0) {
+      sessions[idx] = { ...sessions[idx], ...session };
+    } else {
+      sessions.unshift(session);
+    }
+    // Cap at 25 most recent sessions
+    const capped = sessions.slice(0, 25);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(capped));
+  } catch (e) {
+    console.warn("Could not save session to localStorage:", e);
+  }
+}
+
+export function getLocalSessionById(id: string): SavedProjectSession | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const sessions = getLocalSessions();
+    return sessions.find(s => s.id === id) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function updateLocalSession(id: string, updates: Partial<SavedProjectSession>): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const sessions = getLocalSessions();
+    const idx = sessions.findIndex(s => s.id === id);
+    if (idx >= 0) {
+      sessions[idx] = { ...sessions[idx], ...updates };
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(sessions));
+    }
+  } catch (e) {
+    console.warn("Could not update local session:", e);
+  }
+}
+
+export function removeLocalSession(id: string): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const sessions = getLocalSessions().filter(s => s.id !== id);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(sessions));
+  } catch (e) {
+    console.warn("Could not delete from local storage:", e);
+  }
+}
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const isQuota = isQuotaError(error);
+  const rawMsg = error instanceof Error ? error.message : String(error);
+
+  if (isQuota) {
+    setCloudQuotaExceeded(true);
+    console.warn(`[TourGenie Firebase] Cloud database daily write quota reached for ${path}. Preserving changes in local storage.`);
+    const friendlyMsg = "Cloud write quota reached: The daily free-tier limit for the cloud database is reached for today. Changes are safely saved locally and available for direct sharing.";
+    const err = new Error(friendlyMsg);
+    (err as any).isQuotaExceeded = true;
+    (err as any).originalMessage = rawMsg;
+    throw err;
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: rawMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -408,19 +521,23 @@ export async function saveUserSession(
     console.log(`[TourGenie] Reduced session size to ${estimatedBytes} bytes.`);
   }
 
+  // Always save to local storage first (instant, 100% resilient)
+  saveLocalSession(cleanSessionData);
+
+  // If cloud write quota was previously reached today, preserve locally and return without stalling write streams
+  if (getCloudQuotaExceeded()) {
+    console.warn(`[TourGenie] Cloud quota reached today. Session ${sessionId} safely stored locally.`);
+    return sessionId;
+  }
+
   try {
-    // Save clean root session document
+    // Save clean root session document ONLY (single source of truth, eliminates duplicate write volume)
     const globalSessionRef = doc(db, "sessions", sessionId);
     await setDoc(globalSessionRef, cleanSessionData, { merge: true });
 
-    // Mirror to user subcollection
-    const userSessionRef = doc(db, "users", userId, "sessions", sessionId);
-    await setDoc(userSessionRef, cleanSessionData, { merge: true });
-
-    // 5. Save heavy audio chunks to audio subcollections in parallel (non-blocking)
-    // Audio chunks > 400KB are automatically split into part documents (__p0, __p1...) to strictly respect Firestore's 1MB limit
+    // 5. Save heavy audio chunks to audio subcollections in parallel (single collection)
     if (audioChunksToSave.length > 0) {
-      const MAX_AUDIO_PART_SIZE = 400_000; // 400KB per document - strictly under 1,048,576 byte limit
+      const MAX_AUDIO_PART_SIZE = 400_000;
       Promise.allSettled(
         audioChunksToSave.map(async (chunk) => {
           try {
@@ -437,55 +554,25 @@ export async function saveUserSession(
                 audioBase64: rawAudio,
                 updatedAt: serverTimestamp()
               }, { merge: true });
-
-              if (userId) {
-                const userAudioDocRef = doc(db, "users", userId, "sessions", sessionId, "audio", chunk.id);
-                await setDoc(userAudioDocRef, {
-                  clipId: chunk.id,
-                  partIndex: 0,
-                  totalParts: 1,
-                  data: rawAudio,
-                  audioBase64: rawAudio,
-                  updatedAt: serverTimestamp()
-                }, { merge: true });
-              }
             } else {
               const totalParts = Math.ceil(rawAudio.length / MAX_AUDIO_PART_SIZE);
-              const partWrites: Promise<any>[] = [];
-
               for (let p = 0; p < totalParts; p++) {
                 const partSlice = rawAudio.slice(p * MAX_AUDIO_PART_SIZE, (p + 1) * MAX_AUDIO_PART_SIZE);
                 const partDocId = `${chunk.id}__p${p}`;
-
                 const audioDocRef = doc(db, "sessions", sessionId, "audio", partDocId);
-                partWrites.push(
-                  setDoc(audioDocRef, {
-                    clipId: chunk.id,
-                    partIndex: p,
-                    totalParts,
-                    data: partSlice,
-                    updatedAt: serverTimestamp()
-                  }, { merge: true })
-                );
-
-                if (userId) {
-                  const userAudioDocRef = doc(db, "users", userId, "sessions", sessionId, "audio", partDocId);
-                  partWrites.push(
-                    setDoc(userAudioDocRef, {
-                      clipId: chunk.id,
-                      partIndex: p,
-                      totalParts,
-                      data: partSlice,
-                      updatedAt: serverTimestamp()
-                    }, { merge: true })
-                  );
-                }
+                await setDoc(audioDocRef, {
+                  clipId: chunk.id,
+                  partIndex: p,
+                  totalParts,
+                  data: partSlice,
+                  updatedAt: serverTimestamp()
+                }, { merge: true });
               }
-
-              await Promise.all(partWrites);
             }
           } catch (audioErr) {
-            console.warn(`Could not save audio chunk ${chunk.id}:`, audioErr);
+            if (isQuotaError(audioErr)) {
+              setCloudQuotaExceeded(true);
+            }
           }
         })
       ).catch(() => {});
@@ -493,16 +580,35 @@ export async function saveUserSession(
 
     return sessionId;
   } catch (error) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      console.warn(`[TourGenie] Cloud write quota exceeded. Session ${sessionId} safely preserved in local storage.`);
+      return sessionId; // Do not crash the application!
+    }
     handleFirestoreError(error, OperationType.WRITE, `sessions/${sessionId}`);
   }
 }
 
 export async function getUserSessions(userId: string): Promise<SavedProjectSession[]> {
+  const sessionsMap = new Map<string, SavedProjectSession>();
+
+  // 1. Load local sessions first (instant, works offline or under quota throttling)
+  try {
+    const local = getLocalSessions();
+    local.forEach(s => {
+      if (!s.userId || s.userId === userId || s.userId.startsWith('guest_') || userId.startsWith('guest_')) {
+        sessionsMap.set(s.id, s);
+      }
+    });
+  } catch (e) {
+    console.warn("Could not read local sessions:", e);
+  }
+
+  // 2. Fetch from Firestore if available
   try {
     const globalCol = collection(db, "sessions");
     const q = query(globalCol, where("userId", "==", userId));
     const snap = await getDocs(q);
-    const sessionsMap = new Map<string, SavedProjectSession>();
     
     snap.forEach((d) => {
       const data = d.data() as SavedProjectSession;
@@ -511,34 +617,22 @@ export async function getUserSessions(userId: string): Promise<SavedProjectSessi
         id: data?.id || d.id
       });
     });
-
-    // Also check user subcollection for any older unmigrated records
-    try {
-      const userCol = collection(db, "users", userId, "sessions");
-      const userSnap = await getDocs(userCol);
-      userSnap.forEach((d) => {
-        if (!sessionsMap.has(d.id)) {
-          const data = d.data() as SavedProjectSession;
-          sessionsMap.set(d.id, {
-            ...data,
-            id: data?.id || d.id
-          });
-        }
-      });
-    } catch (e) {
-      // Non-fatal
-    }
-
-    const list = Array.from(sessionsMap.values());
-    list.sort((a, b) => {
-      const timeA = a.updatedAt?.seconds || (typeof a.updatedAt === 'number' ? a.updatedAt : 0);
-      const timeB = b.updatedAt?.seconds || (typeof b.updatedAt === 'number' ? b.updatedAt : 0);
-      return timeB - timeA;
-    });
-    return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, `sessions?userId=${userId}`);
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      console.warn("Firestore query throttled by quota; returning local sessions.");
+    } else {
+      console.warn("Could not query Firestore sessions:", error);
+    }
   }
+
+  const list = Array.from(sessionsMap.values());
+  list.sort((a, b) => {
+    const timeA = a.updatedAt?.seconds || (typeof a.updatedAt === 'number' ? a.updatedAt : 0);
+    const timeB = b.updatedAt?.seconds || (typeof b.updatedAt === 'number' ? b.updatedAt : 0);
+    return timeB - timeA;
+  });
+  return list;
 }
 
 export async function getSharedWithMeSessions(userEmail: string): Promise<SavedProjectSession[]> {
@@ -581,6 +675,12 @@ export async function getPublicSessions(): Promise<SavedProjectSession[]> {
 }
 
 export async function getSessionById(sessionId: string): Promise<SavedProjectSession | null> {
+  // Check local cache first
+  const local = getLocalSessionById(sessionId);
+  if (local) {
+    return local;
+  }
+
   try {
     const sessionRef = doc(db, "sessions", sessionId);
     const snap = await getDoc(sessionRef);
@@ -614,13 +714,20 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
         console.warn("[TourGenie] Could not load audio subcollection chunks:", subcollectionErr);
       }
 
-      return {
+      const fullSession: SavedProjectSession = {
         ...data,
         id: data?.id || snap.id
       };
+      // Cache in local storage
+      saveLocalSession(fullSession);
+      return fullSession;
     }
     return null;
   } catch (error) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      return local || null;
+    }
     handleFirestoreError(error, OperationType.GET, `sessions/${sessionId}`);
   }
 }
@@ -629,79 +736,101 @@ export async function shareSessionWithEmail(
   sessionId: string, 
   email: string, 
   fallbackSessionData?: SavedProjectSession | null
-): Promise<void> {
+): Promise<{ success: boolean; cloudSynced: boolean; message?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
-  if (!normalizedEmail) return;
-  const currentUid = auth.currentUser?.uid;
-  const currentEmail = auth.currentUser?.email;
+  if (!normalizedEmail) return { success: false, cloudSynced: false, message: "Invalid email" };
 
+  // 1. Always update local session first (instant, guaranteed)
+  const existingLocal = getLocalSessionById(sessionId) || fallbackSessionData;
+  const currentShared = existingLocal?.sharedWithEmails || [];
+  const updatedShared = Array.from(new Set([...currentShared, normalizedEmail]));
+  
+  if (existingLocal) {
+    updateLocalSession(sessionId, {
+      ...existingLocal,
+      sharedWithEmails: updatedShared
+    });
+  }
+
+  // 2. If cloud quota is known to be exceeded, return success with notice (no write stream stall)
+  if (getCloudQuotaExceeded()) {
+    return {
+      success: true,
+      cloudSynced: false,
+      message: "Collaborator added locally. (Cloud write quota reached for today; share via Direct Link or Export File)."
+    };
+  }
+
+  // 3. Lightweight updateDoc: ONLY sends ~40 bytes of data (sharedWithEmails), NEVER massive clips!
   try {
     const sessionRef = doc(db, "sessions", sessionId);
-    const updatePayload: Record<string, any> = {
-      id: sessionId,
+    await updateDoc(sessionRef, {
       sharedWithEmails: arrayUnion(normalizedEmail),
       updatedAt: serverTimestamp()
-    };
-
-    // If fallback session data was provided (e.g. from user state or older subcollection),
-    // ensure base properties exist so document creation succeeds if missing in top-level collection
-    if (fallbackSessionData) {
-      if (fallbackSessionData.title) updatePayload.title = fallbackSessionData.title;
-      if (fallbackSessionData.userId) updatePayload.userId = fallbackSessionData.userId;
-      else if (currentUid) updatePayload.userId = currentUid;
-      if (fallbackSessionData.ownerEmail) updatePayload.ownerEmail = fallbackSessionData.ownerEmail;
-      else if (currentEmail) updatePayload.ownerEmail = currentEmail;
-      if (fallbackSessionData.clips) updatePayload.clips = fallbackSessionData.clips;
-      if (fallbackSessionData.clipsCount !== undefined) updatePayload.clipsCount = fallbackSessionData.clipsCount;
-      if (fallbackSessionData.totalDuration !== undefined) updatePayload.totalDuration = fallbackSessionData.totalDuration;
-      if (fallbackSessionData.isRendered !== undefined) updatePayload.isRendered = fallbackSessionData.isRendered;
-      if (fallbackSessionData.combinedVideoUrl) updatePayload.combinedVideoUrl = fallbackSessionData.combinedVideoUrl;
-    } else if (currentUid) {
-      updatePayload.userId = currentUid;
-      if (currentEmail) updatePayload.ownerEmail = currentEmail;
+    });
+    return { success: true, cloudSynced: true };
+  } catch (error: any) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      return {
+        success: true,
+        cloudSynced: false,
+        message: "Collaborator added locally. (Cloud database write quota reached; share via Direct Link or Export File)."
+      };
     }
 
-    await setDoc(sessionRef, updatePayload, { merge: true });
-
-    // Also update if mirrored in owner's subcollection
-    if (currentUid) {
+    // If document is not in cloud root yet (e.g. was saved locally), create a lightweight metadata doc
+    if (error?.code === 'not-found' && fallbackSessionData) {
       try {
-        const userSessionRef = doc(db, "users", currentUid, "sessions", sessionId);
-        await setDoc(userSessionRef, {
-          sharedWithEmails: arrayUnion(normalizedEmail),
+        const sessionRef = doc(db, "sessions", sessionId);
+        await setDoc(sessionRef, {
+          id: sessionId,
+          userId: fallbackSessionData.userId || auth.currentUser?.uid || 'guest',
+          title: fallbackSessionData.title || fallbackSessionData.sessionName || "Tour",
+          sharedWithEmails: updatedShared,
+          isPublic: !!fallbackSessionData.isPublic,
           updatedAt: serverTimestamp()
         }, { merge: true });
-      } catch (e) {
-        // Ignored if user doc was not yet mirrored
+        return { success: true, cloudSynced: true };
+      } catch (err2) {
+        if (isQuotaError(err2)) {
+          setCloudQuotaExceeded(true);
+          return {
+            success: true,
+            cloudSynced: false,
+            message: "Collaborator added locally. (Cloud write quota reached; share via Direct Link or Export File)."
+          };
+        }
       }
     }
-  } catch (error) {
+
     handleFirestoreError(error, OperationType.UPDATE, `sessions/${sessionId}`);
   }
 }
 
 export async function unshareSessionWithEmail(sessionId: string, email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
+  const existingLocal = getLocalSessionById(sessionId);
+  if (existingLocal && existingLocal.sharedWithEmails) {
+    updateLocalSession(sessionId, {
+      ...existingLocal,
+      sharedWithEmails: existingLocal.sharedWithEmails.filter(e => e.toLowerCase() !== normalizedEmail)
+    });
+  }
+
+  if (getCloudQuotaExceeded()) return;
+
   try {
     const sessionRef = doc(db, "sessions", sessionId);
-    await setDoc(sessionRef, {
+    await updateDoc(sessionRef, {
       sharedWithEmails: arrayRemove(normalizedEmail),
       updatedAt: serverTimestamp()
-    }, { merge: true });
-
-    const currentUid = auth.currentUser?.uid;
-    if (currentUid) {
-      try {
-        const userSessionRef = doc(db, "users", currentUid, "sessions", sessionId);
-        await setDoc(userSessionRef, {
-          sharedWithEmails: arrayRemove(normalizedEmail),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      } catch (e) {
-        // Ignore
-      }
-    }
+    });
   } catch (error) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      return;
+    }
     handleFirestoreError(error, OperationType.UPDATE, `sessions/${sessionId}`);
   }
 }
@@ -710,75 +839,69 @@ export async function toggleSessionPublicAccess(
   sessionId: string, 
   isPublic: boolean,
   fallbackSessionData?: SavedProjectSession | null
-): Promise<void> {
-  const currentUid = auth.currentUser?.uid;
-  const currentEmail = auth.currentUser?.email;
+): Promise<{ success: boolean; cloudSynced: boolean; message?: string }> {
+  // 1. Update local session
+  const existingLocal = getLocalSessionById(sessionId) || fallbackSessionData;
+  if (existingLocal) {
+    updateLocalSession(sessionId, {
+      ...existingLocal,
+      isPublic
+    });
+  }
 
+  if (getCloudQuotaExceeded()) {
+    return { success: true, cloudSynced: false, message: "Visibility updated locally." };
+  }
+
+  // 2. Lightweight updateDoc (only ~30 bytes)
   try {
     const sessionRef = doc(db, "sessions", sessionId);
-    const updatePayload: Record<string, any> = {
-      id: sessionId,
+    await updateDoc(sessionRef, {
       isPublic,
       updatedAt: serverTimestamp()
-    };
-
-    if (fallbackSessionData) {
-      if (fallbackSessionData.title) updatePayload.title = fallbackSessionData.title;
-      if (fallbackSessionData.userId) updatePayload.userId = fallbackSessionData.userId;
-      else if (currentUid) updatePayload.userId = currentUid;
-      if (fallbackSessionData.ownerEmail) updatePayload.ownerEmail = fallbackSessionData.ownerEmail;
-      else if (currentEmail) updatePayload.ownerEmail = currentEmail;
-      if (fallbackSessionData.clips) updatePayload.clips = fallbackSessionData.clips;
-    } else if (currentUid) {
-      updatePayload.userId = currentUid;
-      if (currentEmail) updatePayload.ownerEmail = currentEmail;
+    });
+    return { success: true, cloudSynced: true };
+  } catch (error) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      return { success: true, cloudSynced: false, message: "Visibility updated locally." };
     }
-
-    await setDoc(sessionRef, updatePayload, { merge: true });
-
-    if (currentUid) {
+    if ((error as any)?.code === 'not-found' && fallbackSessionData) {
       try {
-        const userSessionRef = doc(db, "users", currentUid, "sessions", sessionId);
-        await setDoc(userSessionRef, {
+        const sessionRef = doc(db, "sessions", sessionId);
+        await setDoc(sessionRef, {
+          id: sessionId,
+          userId: fallbackSessionData.userId || auth.currentUser?.uid || 'guest',
+          title: fallbackSessionData.title || fallbackSessionData.sessionName || "Tour",
           isPublic,
           updatedAt: serverTimestamp()
         }, { merge: true });
-      } catch (e) {
-        // Ignore
+        return { success: true, cloudSynced: true };
+      } catch (e2) {
+        if (isQuotaError(e2)) {
+          setCloudQuotaExceeded(true);
+          return { success: true, cloudSynced: false, message: "Visibility updated locally." };
+        }
       }
     }
-  } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `sessions/${sessionId}`);
   }
 }
 
 export async function deleteUserSession(userId: string, sessionId: string): Promise<void> {
+  // Always remove locally first
+  removeLocalSession(sessionId);
+
+  if (getCloudQuotaExceeded()) return;
+
   try {
     const globalSessionRef = doc(db, "sessions", sessionId);
     await deleteDoc(globalSessionRef);
-
-    const sessionRef = doc(db, "users", userId, "sessions", sessionId);
-    await deleteDoc(sessionRef);
-
-    // Clean up audio subcollection documents in background
-    try {
-      const audioCol = collection(db, "sessions", sessionId, "audio");
-      const audioSnap = await getDocs(audioCol);
-      await Promise.allSettled(audioSnap.docs.map(d => deleteDoc(d.ref)));
-    } catch {
-      // Non-critical
-    }
-
-    if (userId) {
-      try {
-        const userAudioCol = collection(db, "users", userId, "sessions", sessionId, "audio");
-        const userAudioSnap = await getDocs(userAudioCol);
-        await Promise.allSettled(userAudioSnap.docs.map(d => deleteDoc(d.ref)));
-      } catch {
-        // Non-critical
-      }
-    }
   } catch (error) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      return;
+    }
     handleFirestoreError(error, OperationType.DELETE, `sessions/${sessionId}`);
   }
 }
@@ -788,6 +911,11 @@ export async function updateSessionOrganization(
   sessionId: string,
   updates: { sessionName?: string; projectName?: string }
 ): Promise<void> {
+  // Update local session
+  updateLocalSession(sessionId, updates);
+
+  if (getCloudQuotaExceeded()) return;
+
   const cleanUpdates: Record<string, any> = {
     updatedAt: serverTimestamp()
   };
@@ -803,16 +931,11 @@ export async function updateSessionOrganization(
   try {
     const globalRef = doc(db, "sessions", sessionId);
     await updateDoc(globalRef, cleanUpdates);
-
-    if (userId) {
-      try {
-        const userRef = doc(db, "users", userId, "sessions", sessionId);
-        await updateDoc(userRef, cleanUpdates);
-      } catch (e) {
-        // User subcollection might be absent or mirrored
-      }
-    }
   } catch (error) {
+    if (isQuotaError(error)) {
+      setCloudQuotaExceeded(true);
+      return;
+    }
     handleFirestoreError(error, OperationType.UPDATE, `sessions/${sessionId}`);
   }
 }
