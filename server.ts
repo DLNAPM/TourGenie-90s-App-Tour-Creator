@@ -481,6 +481,51 @@ async function startServer() {
     }
   });
 
+  // Helper: Inspect media header bytes to identify images, WebM, MP4, etc.
+  function inspectMediaFile(filePath: string, mimeType?: string, originalName?: string): { isImage: boolean; isVideo: boolean; ext: string } {
+    try {
+      if (fs.existsSync(filePath)) {
+        const stat = fs.statSync(filePath);
+        if (stat.size > 0) {
+          const buf = Buffer.alloc(Math.min(64, stat.size));
+          const fd = fs.openSync(filePath, 'r');
+          const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+          fs.closeSync(fd);
+
+          // PNG: 89 50 4E 47
+          if (bytesRead >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) {
+            return { isImage: true, isVideo: false, ext: '.png' };
+          }
+          // JPEG: FF D8 FF
+          if (bytesRead >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) {
+            return { isImage: true, isVideo: false, ext: '.jpg' };
+          }
+          // WebP: RIFF .... WEBP
+          if (bytesRead >= 12 && buf.toString('utf8', 0, 4) === 'RIFF' && buf.toString('utf8', 8, 12) === 'WEBP') {
+            return { isImage: true, isVideo: false, ext: '.webp' };
+          }
+          // WebM / MKV: 1A 45 DF A3
+          if (bytesRead >= 4 && buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3) {
+            return { isImage: false, isVideo: true, ext: '.webm' };
+          }
+          // MP4 / MOV: ftyp or moov
+          if (bytesRead >= 12 && (buf.toString('utf8', 4, 8) === 'ftyp' || buf.toString('utf8', 4, 8) === 'moov' || buf.toString('utf8', 0, 4) === 'moov')) {
+            return { isImage: false, isVideo: true, ext: '.mp4' };
+          }
+        }
+      }
+    } catch (e) {}
+
+    if (mimeType?.startsWith('image/') || originalName?.match(/\.(png|jpe?g|webp|bmp|gif)$/i)) {
+      const ext = originalName?.match(/\.(png|jpe?g|webp|bmp|gif)$/i)?.[0]?.toLowerCase() || '.png';
+      return { isImage: true, isVideo: false, ext };
+    }
+    if (mimeType?.includes('webm') || originalName?.endsWith('.webm')) {
+      return { isImage: false, isVideo: true, ext: '.webm' };
+    }
+    return { isImage: false, isVideo: true, ext: '.mp4' };
+  }
+
   // 8. Stitch Master Video (All Scenes Concatenated with FFmpeg into a Single Broadcast MP4)
   const uploadDir = path.join(os.tmpdir(), "tourgenie-uploads");
   if (!fs.existsSync(uploadDir)) {
@@ -507,27 +552,72 @@ async function startServer() {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const normPath = path.join(sessionDir, `norm_${i.toString().padStart(3, '0')}.mp4`);
+        const mediaInfo = inspectMediaFile(file.path, file.mimetype, file.originalname);
+        const typedInputPath = path.join(sessionDir, `input_${i}${mediaInfo.ext}`);
 
-        // Check if clip has an audio stream using ffprobe
-        let hasAudio = false;
+        // Provide typed file extension so FFmpeg demuxer recognizes input accurately
         try {
-          const { stdout } = await execAsync(`ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${file.path}"`);
-          if (stdout.trim().length > 0) {
-            hasAudio = true;
+          fs.copyFileSync(file.path, typedInputPath);
+        } catch (copyErr) {
+          console.warn(`[Stitch Engine] Could not copy input to typed path for clip ${i}:`, copyErr);
+        }
+        const effectiveInput = fs.existsSync(typedInputPath) ? typedInputPath : file.path;
+
+        let normalizedSuccessfully = false;
+
+        // Case A: Input is a static image or screenshot - convert with -loop 1 to 10-second 1080p/720p H.264
+        if (mediaInfo.isImage) {
+          try {
+            console.log(`[Stitch Engine] Clip ${i} detected as image (${mediaInfo.ext}), generating loop animation`);
+            const imgCmd = `ffmpeg -y -loop 1 -t 10 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            await execAsync(imgCmd);
+            normalizedSuccessfully = true;
+          } catch (imgErr: any) {
+            console.warn(`[Stitch Engine] Image loop conversion warning for clip ${i}:`, imgErr?.message || imgErr);
           }
-        } catch (probeErr) {
-          console.warn(`[Stitch Engine] ffprobe audio check warning for clip ${i}:`, probeErr);
-        }
-
-        // Standardize each scene to 1280x720 30fps H.264 (yuv420p) + AAC 44.1kHz stereo audio
-        let normCmd = '';
-        if (hasAudio) {
-          normCmd = `ffmpeg -y -i "${file.path}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
         } else {
-          normCmd = `ffmpeg -y -i "${file.path}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+          // Case B: Video input - probe audio stream
+          let hasAudio = false;
+          try {
+            const { stdout } = await execAsync(`ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${effectiveInput}"`);
+            if (stdout.trim().length > 0) {
+              hasAudio = true;
+            }
+          } catch (probeErr) {
+            console.warn(`[Stitch Engine] ffprobe audio check warning for clip ${i}:`, probeErr);
+          }
+
+          // Primary normalization attempt with error tolerance
+          try {
+            let normCmd = '';
+            if (hasAudio) {
+              normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
+            } else {
+              normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            }
+            await execAsync(normCmd);
+            normalizedSuccessfully = true;
+          } catch (primaryErr: any) {
+            console.warn(`[Stitch Engine] Primary normalization failed for clip ${i}, attempting secondary demux:`, primaryErr?.message || primaryErr);
+
+            // Secondary fallback: Explicit Matroska/WebM demuxer
+            try {
+              const fallbackCmd = `ffmpeg -y -err_detect ignore_err -f matroska,webm -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              await execAsync(fallbackCmd);
+              normalizedSuccessfully = true;
+            } catch (fallbackErr: any) {
+              console.warn(`[Stitch Engine] Demux fallback also failed for clip ${i}:`, fallbackErr?.message || fallbackErr);
+            }
+          }
         }
 
-        await execAsync(normCmd);
+        // Final safeguard: If normalization couldn't process this single clip, generate a 5-second graceful scene
+        if (!normalizedSuccessfully || !fs.existsSync(normPath) || fs.statSync(normPath).size < 100) {
+          console.warn(`[Stitch Engine] Generating graceful recovery scene for clip ${i} to guarantee complete master tour`);
+          const recoveryCmd = `ffmpeg -y -f lavfi -i color=c=0x0b0f19:s=1280x720:r=30 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 5 -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${normPath}"`;
+          await execAsync(recoveryCmd);
+        }
+
         normalizedFiles.push(normPath);
       }
 

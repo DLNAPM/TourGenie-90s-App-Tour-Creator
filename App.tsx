@@ -680,12 +680,16 @@ export default function App() {
         
         try {
           let videoUrl = clip.videoUrl || clip.previewUrl;
-          const isImage = !videoUrl || videoUrl.startsWith('data:image') || videoUrl.endsWith('.png') || videoUrl.endsWith('.jpg') || videoUrl.endsWith('.jpeg');
+          const isLikelyImage = !videoUrl || 
+            (clip.screenshotUrl && !clip.videoUrl) ||
+            (clip.file && clip.file.type.startsWith('image/')) ||
+            videoUrl.startsWith('data:image') || 
+            /\.(png|jpe?g|webp|gif|bmp)(\?.*)?$/i.test(videoUrl);
 
-          if (isImage) {
+          if (isLikelyImage) {
             const shot = clip.screenshotUrl || clip.rawScreenshot || clip.previewUrl;
             if (shot) {
-              setRenderStage(`Generating animation for Scene ${i + 1}...`);
+              setRenderStage(`Generating Screen Studio animation for Scene ${i + 1}...`);
               videoUrl = await tourService.generateSceneVideo(
                 { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
                 shot,
@@ -698,11 +702,36 @@ export default function App() {
 
           if (videoUrl) {
             const res = await fetch(videoUrl);
-            const blob = await res.blob();
-            clipBlobs.push(blob);
+            if (!res.ok) {
+              throw new Error(`Failed to fetch scene stream: HTTP ${res.status}`);
+            }
+            let blob = await res.blob();
+
+            // If the fetched blob is still an image, run Screen Studio engine to convert it to a video
+            if (blob.type.startsWith('image/')) {
+              const shot = clip.screenshotUrl || clip.rawScreenshot || videoUrl;
+              if (shot) {
+                setRenderStage(`Converting screenshot to HD video for Scene ${i + 1}...`);
+                videoUrl = await tourService.generateSceneVideo(
+                  { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
+                  shot,
+                  { duration: clip.duration || 15, audioBase64: clip.audioUrl, sceneIndex: i }
+                );
+                clip.videoUrl = videoUrl;
+                clip.previewUrl = videoUrl;
+                const animatedRes = await fetch(videoUrl);
+                if (animatedRes.ok) {
+                  blob = await animatedRes.blob();
+                }
+              }
+            }
+
+            if (blob && blob.size > 0) {
+              clipBlobs.push(blob);
+            }
           }
         } catch (fetchErr) {
-          console.warn(`Could not fetch blob for clip ${i}:`, fetchErr);
+          console.warn(`Could not prepare video stream for clip ${i}:`, fetchErr);
         }
       }
 
@@ -719,7 +748,11 @@ export default function App() {
       try {
         const formData = new FormData();
         clipBlobs.forEach((blob, idx) => {
-          formData.append('clips', blob, `scene-${idx + 1}.mp4`);
+          let ext = 'mp4';
+          if (blob.type.includes('webm')) ext = 'webm';
+          else if (blob.type.includes('png')) ext = 'png';
+          else if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpg';
+          formData.append('clips', blob, `scene-${idx + 1}.${ext}`);
         });
         const title = editorState.youtubeMetadata?.title || 'TourGenie_Master_Tour';
         formData.append('title', title);

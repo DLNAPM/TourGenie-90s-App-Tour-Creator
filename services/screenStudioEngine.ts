@@ -604,6 +604,49 @@ export async function stitchClipsClientSide(
     const pct = Math.floor((i / clipUrls.length) * 100);
     if (onProgress) onProgress(`Assembling scene ${i + 1} of ${clipUrls.length}...`, pct);
 
+    const isImage = url.startsWith('data:image') || /\.(png|jpe?g|webp|gif|bmp)(\?.*)?$/i.test(url);
+    if (isImage) {
+      await new Promise<void>((resolveImage) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          let elapsed = 0;
+          const durationMs = 5000;
+          const startTime = performance.now();
+          const imgLoop = (now: number) => {
+            elapsed = now - startTime;
+            ctx.fillStyle = '#090d16';
+            ctx.fillRect(0, 0, width, height);
+
+            const vRatio = img.naturalWidth / img.naturalHeight;
+            const targetRatio = width / height;
+            let dw = width;
+            let dh = height;
+            let dx = 0;
+            let dy = 0;
+            if (vRatio > targetRatio) {
+              dh = width / vRatio;
+              dy = (height - dh) / 2;
+            } else {
+              dw = height * vRatio;
+              dx = (width - dw) / 2;
+            }
+            ctx.drawImage(img, dx, dy, dw, dh);
+
+            if (elapsed < durationMs) {
+              requestAnimationFrame(imgLoop);
+            } else {
+              resolveImage();
+            }
+          };
+          requestAnimationFrame(imgLoop);
+        };
+        img.onerror = () => resolveImage();
+        img.src = url;
+      });
+      continue;
+    }
+
     await new Promise<void>((resolveClip) => {
       let isEnded = false;
       let animFrameId = 0;
