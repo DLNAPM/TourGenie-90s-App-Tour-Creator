@@ -326,25 +326,51 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
   }
 }
 
-export async function shareSessionWithEmail(sessionId: string, email: string): Promise<void> {
+export async function shareSessionWithEmail(
+  sessionId: string, 
+  email: string, 
+  fallbackSessionData?: SavedProjectSession | null
+): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   if (!normalizedEmail) return;
+  const currentUid = auth.currentUser?.uid;
+  const currentEmail = auth.currentUser?.email;
+
   try {
     const sessionRef = doc(db, "sessions", sessionId);
-    await updateDoc(sessionRef, {
+    const updatePayload: Record<string, any> = {
       sharedWithEmails: arrayUnion(normalizedEmail),
       updatedAt: serverTimestamp()
-    });
+    };
+
+    // If fallback session data was provided (e.g. from user state or older subcollection),
+    // ensure base properties exist so document creation succeeds if missing in top-level collection
+    if (fallbackSessionData) {
+      if (fallbackSessionData.title) updatePayload.title = fallbackSessionData.title;
+      if (fallbackSessionData.userId) updatePayload.userId = fallbackSessionData.userId;
+      else if (currentUid) updatePayload.userId = currentUid;
+      if (fallbackSessionData.ownerEmail) updatePayload.ownerEmail = fallbackSessionData.ownerEmail;
+      else if (currentEmail) updatePayload.ownerEmail = currentEmail;
+      if (fallbackSessionData.clips) updatePayload.clips = fallbackSessionData.clips;
+      if (fallbackSessionData.clipsCount !== undefined) updatePayload.clipsCount = fallbackSessionData.clipsCount;
+      if (fallbackSessionData.totalDuration !== undefined) updatePayload.totalDuration = fallbackSessionData.totalDuration;
+      if (fallbackSessionData.isRendered !== undefined) updatePayload.isRendered = fallbackSessionData.isRendered;
+      if (fallbackSessionData.combinedVideoUrl) updatePayload.combinedVideoUrl = fallbackSessionData.combinedVideoUrl;
+    } else if (currentUid) {
+      updatePayload.userId = currentUid;
+      if (currentEmail) updatePayload.ownerEmail = currentEmail;
+    }
+
+    await setDoc(sessionRef, updatePayload, { merge: true });
 
     // Also update if mirrored in owner's subcollection
-    const currentUid = auth.currentUser?.uid;
     if (currentUid) {
       try {
         const userSessionRef = doc(db, "users", currentUid, "sessions", sessionId);
-        await updateDoc(userSessionRef, {
+        await setDoc(userSessionRef, {
           sharedWithEmails: arrayUnion(normalizedEmail),
           updatedAt: serverTimestamp()
-        });
+        }, { merge: true });
       } catch (e) {
         // Ignored if user doc was not yet mirrored
       }
@@ -358,19 +384,19 @@ export async function unshareSessionWithEmail(sessionId: string, email: string):
   const normalizedEmail = email.toLowerCase().trim();
   try {
     const sessionRef = doc(db, "sessions", sessionId);
-    await updateDoc(sessionRef, {
+    await setDoc(sessionRef, {
       sharedWithEmails: arrayRemove(normalizedEmail),
       updatedAt: serverTimestamp()
-    });
+    }, { merge: true });
 
     const currentUid = auth.currentUser?.uid;
     if (currentUid) {
       try {
         const userSessionRef = doc(db, "users", currentUid, "sessions", sessionId);
-        await updateDoc(userSessionRef, {
+        await setDoc(userSessionRef, {
           sharedWithEmails: arrayRemove(normalizedEmail),
           updatedAt: serverTimestamp()
-        });
+        }, { merge: true });
       } catch (e) {
         // Ignore
       }
@@ -380,22 +406,42 @@ export async function unshareSessionWithEmail(sessionId: string, email: string):
   }
 }
 
-export async function toggleSessionPublicAccess(sessionId: string, isPublic: boolean): Promise<void> {
+export async function toggleSessionPublicAccess(
+  sessionId: string, 
+  isPublic: boolean,
+  fallbackSessionData?: SavedProjectSession | null
+): Promise<void> {
+  const currentUid = auth.currentUser?.uid;
+  const currentEmail = auth.currentUser?.email;
+
   try {
     const sessionRef = doc(db, "sessions", sessionId);
-    await updateDoc(sessionRef, {
+    const updatePayload: Record<string, any> = {
       isPublic,
       updatedAt: serverTimestamp()
-    });
+    };
 
-    const currentUid = auth.currentUser?.uid;
+    if (fallbackSessionData) {
+      if (fallbackSessionData.title) updatePayload.title = fallbackSessionData.title;
+      if (fallbackSessionData.userId) updatePayload.userId = fallbackSessionData.userId;
+      else if (currentUid) updatePayload.userId = currentUid;
+      if (fallbackSessionData.ownerEmail) updatePayload.ownerEmail = fallbackSessionData.ownerEmail;
+      else if (currentEmail) updatePayload.ownerEmail = currentEmail;
+      if (fallbackSessionData.clips) updatePayload.clips = fallbackSessionData.clips;
+    } else if (currentUid) {
+      updatePayload.userId = currentUid;
+      if (currentEmail) updatePayload.ownerEmail = currentEmail;
+    }
+
+    await setDoc(sessionRef, updatePayload, { merge: true });
+
     if (currentUid) {
       try {
         const userSessionRef = doc(db, "users", currentUid, "sessions", sessionId);
-        await updateDoc(userSessionRef, {
+        await setDoc(userSessionRef, {
           isPublic,
           updatedAt: serverTimestamp()
-        });
+        }, { merge: true });
       } catch (e) {
         // Ignore
       }

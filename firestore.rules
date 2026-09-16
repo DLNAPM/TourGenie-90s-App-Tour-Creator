@@ -36,18 +36,13 @@ service cloud.firestore {
 
     // Top-level sessions collection for collaborative and cross-user sharing
     match /sessions/{sessionId} {
-      allow get: if isSignedIn() && (isSessionOwner() || isSharedWithUser() || isPublicSession());
-      allow list: if isSignedIn() && (
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn() && (
         resource.data.userId == request.auth.uid ||
-        (resource.data.sharedWithEmails != null && request.auth.token.email != null && request.auth.token.email in resource.data.sharedWithEmails) ||
-        resource.data.isPublic == true
+        (resource.data.ownerEmail != null && request.auth.token.email != null && resource.data.ownerEmail == request.auth.token.email)
       );
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (
-        resource.data.userId == request.auth.uid ||
-        (isSharedWithUser() && request.resource.data.userId == resource.data.userId)
-      );
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
     // Default catch-all for health / connection checks

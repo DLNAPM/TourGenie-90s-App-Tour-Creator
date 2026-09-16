@@ -62,7 +62,7 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
 
     setIsInviting(true);
     try {
-      await shareSessionWithEmail(session.id, cleanEmail);
+      await shareSessionWithEmail(session.id, cleanEmail, session);
       const updated = {
         ...session,
         sharedWithEmails: [...sharedEmails, cleanEmail]
@@ -98,7 +98,7 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({
     const nextState = !isPublic;
     setErrorMsg(null);
     try {
-      await toggleSessionPublicAccess(session.id, nextState);
+      await toggleSessionPublicAccess(session.id, nextState, session);
       const updated = {
         ...session,
         isPublic: nextState
