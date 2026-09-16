@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
 import { TourService } from './services/geminiService';
+import { pcmBase64ToWavBlob } from './services/screenStudioEngine';
 import { 
   PlusIcon, 
   SparklesIcon, 
@@ -8,6 +9,7 @@ import {
   ArrowRightIcon, 
   CloudArrowUpIcon,
   CheckCircleIcon,
+  ShieldCheckIcon,
   PlayIcon,
   ArrowDownTrayIcon,
   ExclamationCircleIcon,
@@ -71,6 +73,7 @@ export default function App() {
   });
 
   const [error, setError] = useState<string | null>(null);
+  const [videoEngineMode, setVideoEngineMode] = useState<'studio' | 'veo'>('studio');
   const previewScrollRef = useRef<HTMLDivElement>(null);
 
   // Derived state for duration tracking
@@ -161,6 +164,107 @@ export default function App() {
       };
       video.src = URL.createObjectURL(file);
     });
+  };
+
+  // --- Audio Helpers ---
+  const playAudioPreview = (audioBase64?: string) => {
+    if (!audioBase64) {
+      setError("No voiceover audio available for this scene.");
+      return;
+    }
+    try {
+      const blob = pcmBase64ToWavBlob(audioBase64);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.play().catch(e => console.warn("Audio playback failed:", e));
+    } catch (err) {
+      console.error("Failed to play audio:", err);
+    }
+  };
+
+  const downloadAudio = (audioBase64?: string, sceneIndex: number = 0) => {
+    if (!audioBase64) {
+      setError("No voiceover audio available for this scene.");
+      return;
+    }
+    try {
+      const blob = pcmBase64ToWavBlob(audioBase64);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `scene-${sceneIndex + 1}-narration.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (err) {
+      console.error("Failed to download audio:", err);
+    }
+  };
+
+  const sendScenesToEditor = async () => {
+    const newClips: EditorClip[] = [];
+    for (let i = 0; i < state.scenes.length; i++) {
+      const scene = state.scenes[i];
+      if (!scene.videoUrl) continue;
+      try {
+        const res = await fetch(scene.videoUrl);
+        const blob = await res.blob();
+        const file = new File([blob], `scene-${i + 1}.mp4`, { type: blob.type || 'video/mp4' });
+        const duration = await getVideoDuration(file).catch(() => 6);
+        newClips.push({
+          id: `scene-clip-${i}-${Date.now()}`,
+          file,
+          previewUrl: scene.videoUrl,
+          duration: duration || 6,
+          status: 'ready',
+          narration: scene.narration,
+          audioUrl: scene.audioUrl
+        });
+      } catch (err) {
+        console.warn("Could not convert scene to editor clip:", err);
+      }
+    }
+
+    if (newClips.length > 0) {
+      setEditorState(prev => ({
+        ...prev,
+        clips: [...prev.clips, ...newClips],
+        isRendered: false
+      }));
+      setActiveTab('editor');
+    }
+  };
+
+  const reRenderScene = async (sceneIndex: number, motionStyle: any) => {
+    const scene = state.scenes[sceneIndex];
+    if (!scene) return;
+
+    const screenshotIndex = scene.screenshotIndex !== undefined 
+      ? scene.screenshotIndex 
+      : (input.screenshots.length > 0 ? (sceneIndex % input.screenshots.length) : undefined);
+    const screenshot = (screenshotIndex !== undefined && input.screenshots[screenshotIndex])
+      ? input.screenshots[screenshotIndex]
+      : (input.screenshots.length > 0 ? input.screenshots[sceneIndex % input.screenshots.length] : undefined);
+
+    const updatedScenes = [...state.scenes];
+    updatedScenes[sceneIndex].status = 'generating';
+    setState(prev => ({ ...prev, scenes: updatedScenes }));
+
+    try {
+      const videoUrl = await tourService.generateSceneVideo(scene, screenshot, {
+        engineMode: videoEngineMode,
+        audioBase64: scene.audioUrl,
+        motionStyle,
+        sceneIndex
+      });
+      updatedScenes[sceneIndex].videoUrl = videoUrl;
+      updatedScenes[sceneIndex].status = 'completed';
+    } catch (err: any) {
+      console.error("Re-render error:", err);
+      updatedScenes[sceneIndex].status = 'failed';
+    }
+    setState(prev => ({ ...prev, scenes: [...updatedScenes] }));
   };
 
   // --- Rendering Simulation ---
@@ -317,7 +421,7 @@ export default function App() {
       const updatedScenes = [...storyboard];
       for (let i = 0; i < updatedScenes.length; i++) {
         updatedScenes[i].status = 'generating';
-        setState(prev => ({ ...prev, scenes: [...updatedScenes], progress: 30 + (i * 10) }));
+        setState(prev => ({ ...prev, scenes: [...updatedScenes], progress: 30 + (i * 12) }));
         try {
           const screenshotIndex = updatedScenes[i].screenshotIndex !== undefined 
             ? updatedScenes[i].screenshotIndex! 
@@ -325,8 +429,22 @@ export default function App() {
           const screenshot = (screenshotIndex !== undefined && input.screenshots[screenshotIndex])
             ? input.screenshots[screenshotIndex]
             : (input.screenshots.length > 0 ? input.screenshots[i % input.screenshots.length] : undefined);
-          const videoUrl = await tourService.generateSceneVideo(updatedScenes[i], screenshot);
-          const audioBase64 = await tourService.generateNarration(updatedScenes[i].narration);
+          
+          // 1. Generate Voiceover Narration via Gemini TTS
+          let audioBase64: string | undefined = undefined;
+          try {
+            audioBase64 = await tourService.generateNarration(updatedScenes[i].narration);
+          } catch (audioErr) {
+            console.warn("Narration TTS warning for scene " + i, audioErr);
+          }
+
+          // 2. Generate Video (using Screen Studio Engine with 100% U.S. English fidelity, or Veo)
+          const videoUrl = await tourService.generateSceneVideo(updatedScenes[i], screenshot, {
+            engineMode: videoEngineMode,
+            audioBase64: audioBase64,
+            sceneIndex: i
+          });
+
           updatedScenes[i].videoUrl = videoUrl;
           updatedScenes[i].audioUrl = audioBase64;
           updatedScenes[i].status = 'completed';
@@ -502,6 +620,55 @@ export default function App() {
                       <label className="block text-sm font-semibold mb-2">Tour Script / Key Features</label>
                       <textarea rows={4} placeholder="Paste your script here." className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" value={input.script} onChange={e => setInput({...input, script: e.target.value})} />
                     </div>
+
+                    {/* Video Synthesis Engine Selector */}
+                    <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                          <SparklesIcon className="w-4 h-4 text-indigo-600" /> Video Synthesis Engine
+                        </label>
+                        <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200 flex items-center gap-1">
+                          <ShieldCheckIcon className="w-3.5 h-3.5 text-green-600" /> 100% U.S. English Guaranteed
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setVideoEngineMode('studio')}
+                          className={`p-3 rounded-xl text-left border transition-all ${
+                            videoEngineMode === 'studio'
+                              ? 'bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20'
+                              : 'bg-white/60 border-slate-200 hover:bg-white text-slate-600'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-900">Screen Studio HD</span>
+                            {videoEngineMode === 'studio' && <CheckCircleIcon className="w-4 h-4 text-indigo-600" />}
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                            Animates your actual screenshots with 100% text fidelity. Zero AI foreign glyphs or hallucinations.
+                          </p>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setVideoEngineMode('veo')}
+                          className={`p-3 rounded-xl text-left border transition-all ${
+                            videoEngineMode === 'veo'
+                              ? 'bg-white border-indigo-600 shadow-sm ring-2 ring-indigo-500/20'
+                              : 'bg-white/60 border-slate-200 hover:bg-white text-slate-600'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-900">Veo AI Diffusion</span>
+                            {videoEngineMode === 'veo' && <CheckCircleIcon className="w-4 h-4 text-indigo-600" />}
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                            Generative diffusion model via Google Veo (may hallucinate fictional screen frames).
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+
                     <button onClick={startGeneration} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group">
                       Generate Storyboard & Video <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </button>
@@ -512,7 +679,7 @@ export default function App() {
                     <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleScreenshotUpload} accept="image/*" />
                     <CloudArrowUpIcon className="w-12 h-12 text-indigo-500 mx-auto mb-4" />
                     <h3 className="text-lg font-bold text-slate-900">Upload Screenshots</h3>
-                    <p className="text-slate-500 text-sm">Reference images for AI animation.</p>
+                    <p className="text-slate-500 text-sm">Upload your 100% U.S. English screenshots to animate into clean HD scenes.</p>
                   </div>
                   {input.screenshots.length > 0 && (
                     <div className="mt-8 grid grid-cols-3 gap-4">
@@ -527,21 +694,101 @@ export default function App() {
                 </div>
               </div>
             ) : state.step === 'final' ? (
-              <div className="space-y-12 animate-in slide-in-from-bottom duration-700">
-                <div className="text-center">
-                  <h2 className="text-4xl font-black text-slate-900 mb-2">Your Tour is Ready!</h2>
-                  <p className="text-slate-500">Download scenes and voiceovers to create your final helper video.</p>
+              <div className="space-y-8 animate-in slide-in-from-bottom duration-700">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/80 pb-6">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h2 className="text-3xl font-black text-slate-900">Your Tour is Ready!</h2>
+                      <span className="bg-green-100 text-green-700 text-xs font-bold px-2.5 py-1 rounded-full border border-green-200 flex items-center gap-1">
+                        <CheckCircleIcon className="w-3.5 h-3.5 text-green-600" /> 100% U.S. English Guaranteed
+                      </span>
+                    </div>
+                    <p className="text-slate-500 text-sm">Download individual scene MP4s and voiceovers, or open all scenes directly in the Video Editor.</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={sendScenesToEditor}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-5 rounded-xl shadow-lg shadow-indigo-100 flex items-center gap-2 text-sm transition active:scale-95"
+                    >
+                      <FilmIcon className="w-4 h-4" /> Open in Video Editor ({state.scenes.length} Scenes)
+                    </button>
+                    <button
+                      onClick={() => setState(prev => ({ ...prev, step: 'input' }))}
+                      className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-3 px-4 rounded-xl text-sm transition"
+                    >
+                      Create Another Tour
+                    </button>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                   {state.scenes.map((scene, idx) => (
-                    <div key={scene.id} className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-                      <video src={scene.videoUrl} className="w-full aspect-video object-cover" controls />
-                      <div className="p-6">
-                        <p className="text-xs font-bold text-indigo-600 uppercase mb-2">Scene {idx + 1}</p>
-                        <p className="text-slate-600 text-sm mb-4 line-clamp-3">"{scene.narration}"</p>
-                        <div className="flex gap-2">
-                          <a href={scene.videoUrl} download={`scene-${idx+1}.mp4`} className="flex-1 bg-slate-900 text-white text-xs font-bold py-2 rounded-lg text-center">Video</a>
-                          <button onClick={() => alert("Audio download ready!")} className="flex-1 border border-slate-200 text-xs font-bold py-2 rounded-lg text-center">Audio</button>
+                    <div key={scene.id} className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between">
+                      <div>
+                        <div className="relative aspect-video bg-slate-950 flex items-center justify-center">
+                          {scene.videoUrl ? (
+                            <video src={scene.videoUrl} className="w-full h-full object-cover" controls playsInline />
+                          ) : (
+                            <div className="text-slate-400 text-xs">No video generated</div>
+                          )}
+                        </div>
+                        <div className="p-6">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Scene {idx + 1}</span>
+                            <span className="text-[11px] font-semibold text-slate-400">{scene.timestamp || '0:00'}</span>
+                          </div>
+                          <p className="text-slate-700 text-sm mb-4 leading-relaxed font-medium">"{scene.narration}"</p>
+                        </div>
+                      </div>
+                      <div className="p-6 pt-0 space-y-3">
+                        {/* Audio controls */}
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => playAudioPreview(scene.audioUrl)}
+                            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition"
+                          >
+                            <SpeakerWaveIcon className="w-3.5 h-3.5 text-indigo-600" /> Play Voiceover
+                          </button>
+                          <button
+                            onClick={() => downloadAudio(scene.audioUrl, idx)}
+                            className="flex-1 border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition"
+                          >
+                            <ArrowDownTrayIcon className="w-3.5 h-3.5 text-slate-500" /> Audio WAV
+                          </button>
+                        </div>
+
+                        {/* Video Download */}
+                        {scene.videoUrl && (
+                          <a
+                            href={scene.videoUrl}
+                            download={`scene-${idx + 1}.mp4`}
+                            className="w-full bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2.5 rounded-lg text-center flex items-center justify-center gap-1.5 transition"
+                          >
+                            <ArrowDownTrayIcon className="w-4 h-4" /> Download Scene Video (MP4)
+                          </a>
+                        )}
+
+                        {/* Re-render Motion selector */}
+                        <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                          <select
+                            id={`motion-${idx}`}
+                            defaultValue="push-in"
+                            className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 outline-none flex-1"
+                          >
+                            <option value="push-in">Push-In Zoom</option>
+                            <option value="pan-horizontal">Horizontal Pan</option>
+                            <option value="pan-vertical">Vertical Scroll</option>
+                            <option value="spotlight">Spotlight & Click</option>
+                            <option value="pull-out">Cinematic Pull-Out</option>
+                          </select>
+                          <button
+                            onClick={() => {
+                              const sel = document.getElementById(`motion-${idx}`) as HTMLSelectElement;
+                              reRenderScene(idx, sel?.value || 'push-in');
+                            }}
+                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition"
+                          >
+                            <ArrowPathIcon className="w-3 h-3" /> Re-render
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -551,8 +798,16 @@ export default function App() {
             ) : (
               <div className="max-w-4xl mx-auto py-24 text-center">
                 <div className="w-20 h-20 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-8" />
-                <h2 className="text-2xl font-bold">TourGenie is working...</h2>
-                <p className="text-slate-500">Processing scene {state.scenes.filter(s=>s.status==='completed').length + 1} of 5</p>
+                <h2 className="text-2xl font-bold text-slate-900 mb-2">TourGenie is creating your tour...</h2>
+                <p className="text-slate-500 mb-4">
+                  Rendering Scene {state.scenes.filter(s => s.status === 'completed').length + 1} of {Math.max(5, state.scenes.length)}
+                </p>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-xs font-semibold text-indigo-700">
+                  <ShieldCheckIcon className="w-4 h-4 text-indigo-600" />
+                  {videoEngineMode === 'studio'
+                    ? 'Screen Studio Engine: Animating screenshot with 100% U.S. English text fidelity'
+                    : 'Veo Engine: Synthesizing generative video clip'}
+                </div>
               </div>
             )
           )

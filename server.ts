@@ -307,9 +307,42 @@ async function startServer() {
         });
       }
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (!base64Audio) {
+      const rawBase64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!rawBase64Audio) {
         return res.status(500).json({ error: "TTS generation failed - no audio data returned" });
+      }
+
+      // Convert raw 16-bit 24kHz linear PCM to standard RIFF WAV so browsers can play it natively
+      let base64Audio = rawBase64Audio;
+      try {
+        const pcmBuffer = Buffer.from(rawBase64Audio, 'base64');
+        // If not already starting with RIFF header, wrap with 44-byte WAV header
+        if (pcmBuffer.length > 4 && pcmBuffer.slice(0, 4).toString() !== 'RIFF') {
+          const sampleRate = 24000;
+          const numChannels = 1;
+          const wavHeader = Buffer.alloc(44);
+          const totalDataLen = pcmBuffer.length;
+          const byteRate = sampleRate * numChannels * 2;
+          const blockAlign = numChannels * 2;
+
+          wavHeader.write('RIFF', 0);
+          wavHeader.writeUInt32LE(36 + totalDataLen, 4);
+          wavHeader.write('WAVE', 8);
+          wavHeader.write('fmt ', 12);
+          wavHeader.writeUInt32LE(16, 16);
+          wavHeader.writeUInt16LE(1, 20); // PCM
+          wavHeader.writeUInt16LE(numChannels, 22);
+          wavHeader.writeUInt32LE(sampleRate, 24);
+          wavHeader.writeUInt32LE(byteRate, 28);
+          wavHeader.writeUInt16LE(blockAlign, 32);
+          wavHeader.writeUInt16LE(16, 34); // 16-bit
+          wavHeader.write('data', 36);
+          wavHeader.writeUInt32LE(totalDataLen, 40);
+
+          base64Audio = Buffer.concat([wavHeader, pcmBuffer]).toString('base64');
+        }
+      } catch (wavErr) {
+        console.warn("Could not wrap PCM in WAV header, returning raw PCM:", wavErr);
       }
 
       res.json({ base64Audio });

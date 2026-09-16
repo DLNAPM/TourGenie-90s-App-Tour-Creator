@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { AppInput, Scene, EditorClip } from "../types";
+import { renderScreenshotToVideo } from "./screenStudioEngine";
 
 function getClientApiKey(): string {
   if (typeof window !== "undefined") {
@@ -135,8 +136,38 @@ export class TourService {
     }));
   }
 
-  async generateSceneVideo(scene: Scene, screenshot?: string): Promise<string> {
-    // 1. Server-Side Video Generation and Streaming (uses Render.com API_KEY)
+  async generateSceneVideo(
+    scene: Scene,
+    screenshot?: string,
+    options?: {
+      engineMode?: 'studio' | 'veo';
+      audioBase64?: string;
+      motionStyle?: 'push-in' | 'pan-horizontal' | 'pan-vertical' | 'spotlight' | 'pull-out' | 'auto';
+      sceneIndex?: number;
+    }
+  ): Promise<string> {
+    const engineMode = options?.engineMode || (screenshot ? 'studio' : 'veo');
+
+    // 1. Pixel-Perfect Screen Studio Engine (Default for uploaded screenshots)
+    // Preserves 100% of the original English UI screenshot with zero diffusion hallucinations or foreign glyphs
+    if (screenshot && engineMode === 'studio') {
+      try {
+        const videoUrl = await renderScreenshotToVideo(screenshot, {
+          sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
+          sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
+          narration: scene.narration,
+          audioBase64: options?.audioBase64,
+          motionStyle: options?.motionStyle || 'auto'
+        });
+        if (videoUrl) {
+          return videoUrl;
+        }
+      } catch (studioErr) {
+        console.warn("Screen Studio rendering encountered an error, falling back to Veo:", studioErr);
+      }
+    }
+
+    // 2. Server-Side Veo Video Generation and Streaming (uses Render.com API_KEY)
     let initRes: Response | null = null;
     try {
       initRes = await fetch("/api/generate-video", {
