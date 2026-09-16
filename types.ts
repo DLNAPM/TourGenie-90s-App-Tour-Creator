@@ -34,6 +34,37 @@ export interface EditorClip {
   audioUrl?: string;
   analysis?: string;
   status: 'idle' | 'analyzing' | 'generating-audio' | 'ready';
+  title?: string;
+  order?: number;
+  cameraMotion?: string;
+  resolution?: string;
+  screenshotUrl?: string;
+  rawScreenshot?: string;
+  videoUrl?: string;
+}
+
+export interface SavedProjectSession {
+  id: string;
+  userId: string;
+  ownerEmail?: string;
+  ownerName?: string;
+  title: string;
+  appDescription?: string;
+  appUrl?: string;
+  script?: string;
+  clipsCount: number;
+  totalDuration: number;
+  isRendered: boolean;
+  combinedVideoUrl?: string;
+  clips: any[];
+  scenes?: Scene[];
+  screenshots?: string[];
+  youtubeMetadata?: any;
+  sharedWithEmails?: string[];
+  sharedWithUids?: string[];
+  isPublic?: boolean;
+  createdAt?: any;
+  updatedAt?: any;
 }
 
 export interface EditorState {

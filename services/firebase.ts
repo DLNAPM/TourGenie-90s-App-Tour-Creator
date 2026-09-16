@@ -28,6 +28,7 @@ import {
   arrayRemove
 } from "firebase/firestore";
 import firebaseConfig from "../firebase-applet-config.json";
+import { compressImageForStorage } from "./imageOptimizer";
 
 // Initialize Firebase
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -110,11 +111,15 @@ export interface SavedProjectSession {
   ownerName?: string;
   title: string;
   appDescription?: string;
+  appUrl?: string;
+  script?: string;
   clipsCount: number;
   totalDuration: number;
   isRendered: boolean;
   combinedVideoUrl?: string;
   clips: any[];
+  scenes?: any[];
+  screenshots?: string[];
   youtubeMetadata?: any;
   sharedWithEmails?: string[];
   sharedWithUids?: string[];
@@ -201,6 +206,60 @@ export async function saveUserSession(
   const sessionId = session.id || `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const currentUser = auth.currentUser;
   
+  // 1. Process clips with image compression and robust field mapping
+  const rawClips = session.clips || [];
+  const processedClips = await Promise.all(
+    rawClips.map(async (c: any, index: number) => {
+      const screenshot = c.screenshotUrl || c.rawScreenshot || (c.previewUrl?.startsWith("data:image") ? c.previewUrl : "") || "";
+      const compressedShot = screenshot.startsWith("data:image") ? await compressImageForStorage(screenshot) : screenshot;
+      
+      return {
+        id: c.id || `clip_${index}`,
+        order: index,
+        title: c.title || c.analysis || `Slide ${index + 1}`,
+        duration: c.duration || 15,
+        narration: c.narration || "",
+        analysis: c.analysis || c.narration || "",
+        cameraMotion: c.cameraMotion || "Slow Zoom In",
+        resolution: c.resolution || "1080p Full HD",
+        previewUrl: c.previewUrl || c.videoUrl || compressedShot || "",
+        videoUrl: c.videoUrl || "",
+        screenshotUrl: compressedShot,
+        rawScreenshot: compressedShot,
+        audioUrl: c.audioUrl || "",
+        status: c.status || "ready"
+      };
+    })
+  );
+
+  // 2. Process scenes (if provided)
+  const rawScenes = session.scenes || [];
+  const processedScenes = rawScenes.map((s: any, index: number) => ({
+    id: s.id || `scene_${index}`,
+    timestamp: s.timestamp || `0:${(index * 15).toString().padStart(2, '0')}`,
+    duration: s.duration || 15,
+    visualPrompt: s.visualPrompt || s.title || `Slide ${index + 1}`,
+    narration: s.narration || "",
+    videoUrl: s.videoUrl || "",
+    audioUrl: s.audioUrl || "",
+    screenshotIndex: s.screenshotIndex !== undefined ? s.screenshotIndex : index,
+    status: s.status || "completed"
+  }));
+
+  // 3. Process screenshots (if provided)
+  const rawScreenshots = session.screenshots || [];
+  const processedScreenshots = await Promise.all(
+    rawScreenshots.map(async (shot: string) => {
+      if (shot?.startsWith("data:image")) {
+        return await compressImageForStorage(shot);
+      }
+      return shot || "";
+    })
+  );
+
+  const totalDuration = session.totalDuration || processedClips.reduce((sum, c) => sum + (c.duration || 0), 0) || (processedScenes.length * 15);
+  const clipsCount = Math.max(processedClips.length, processedScenes.length, processedScreenshots.length, session.clipsCount || 0);
+
   const cleanSessionData: SavedProjectSession = {
     id: sessionId,
     userId,
@@ -208,26 +267,19 @@ export async function saveUserSession(
     ownerName: currentUser?.displayName || session.ownerName || (currentUser?.isAnonymous ? "Guest User" : "TourGenie Creator"),
     title: session.title || "TourGenie Project",
     appDescription: session.appDescription || "",
-    clipsCount: session.clips?.length || 0,
-    totalDuration: session.totalDuration || 0,
+    appUrl: session.appUrl || "",
+    script: session.script || "",
+    clipsCount,
+    totalDuration,
     isRendered: !!session.isRendered,
     combinedVideoUrl: session.combinedVideoUrl || "",
     youtubeMetadata: session.youtubeMetadata || null,
     sharedWithEmails: session.sharedWithEmails || [],
     sharedWithUids: session.sharedWithUids || [],
     isPublic: !!session.isPublic,
-    clips: (session.clips || []).map((c: any, index: number) => ({
-      id: c.id || `clip_${index}`,
-      order: index,
-      title: c.title || `Scene ${index + 1}`,
-      duration: c.duration || 9,
-      narration: c.narration || "",
-      cameraMotion: c.cameraMotion || "Slow Zoom In",
-      resolution: c.resolution || "1080p Full HD",
-      screenshotUrl: c.screenshotUrl?.startsWith("data:") ? c.screenshotUrl : (c.rawScreenshot || c.screenshotUrl || ""),
-      rawScreenshot: c.rawScreenshot || "",
-      audioUrl: c.audioUrl || ""
-    })),
+    clips: processedClips,
+    scenes: processedScenes,
+    screenshots: processedScreenshots,
     updatedAt: serverTimestamp()
   };
 

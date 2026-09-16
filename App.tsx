@@ -179,6 +179,97 @@ export default function App() {
   };
 
   // --- Session Management Helpers ---
+  // Helper to compile all slides/clips/scenes across editor and tour creator
+  const getCompiledProject = () => {
+    let clipsToSave: EditorClip[] = [];
+
+    if (editorState.clips && editorState.clips.length > 0) {
+      clipsToSave = editorState.clips.map((c, idx) => {
+        const matchingScene = state.scenes[idx];
+        const screenshot = c.screenshotUrl || c.rawScreenshot || 
+          (matchingScene && matchingScene.screenshotIndex !== undefined ? input.screenshots[matchingScene.screenshotIndex] : '') ||
+          (input.screenshots[idx % (input.screenshots.length || 1)] || '') ||
+          (c.previewUrl?.startsWith('data:image') ? c.previewUrl : '');
+
+        return {
+          id: c.id || `clip_${idx}_${Date.now()}`,
+          order: idx,
+          title: c.title || c.analysis || matchingScene?.visualPrompt || `Slide ${idx + 1}`,
+          duration: c.duration || matchingScene?.duration || 15,
+          narration: c.narration || matchingScene?.narration || '',
+          analysis: c.analysis || c.narration || '',
+          cameraMotion: c.cameraMotion || matchingScene?.visualPrompt || 'Slow Zoom In',
+          resolution: '1080p Full HD',
+          previewUrl: c.previewUrl || matchingScene?.videoUrl || screenshot || '',
+          videoUrl: c.videoUrl || matchingScene?.videoUrl || '',
+          screenshotUrl: screenshot,
+          rawScreenshot: screenshot,
+          audioUrl: c.audioUrl || matchingScene?.audioUrl || '',
+          status: c.status || 'ready'
+        };
+      });
+    } else if (state.scenes && state.scenes.length > 0) {
+      clipsToSave = state.scenes.map((s, idx) => {
+        const screenshotIndex = s.screenshotIndex !== undefined 
+          ? s.screenshotIndex 
+          : (input.screenshots.length > 0 ? (idx % input.screenshots.length) : undefined);
+        const screenshot = (screenshotIndex !== undefined && input.screenshots[screenshotIndex])
+          ? input.screenshots[screenshotIndex]
+          : (input.screenshots.length > 0 ? input.screenshots[idx % input.screenshots.length] : '');
+
+        return {
+          id: s.id || `scene_clip_${idx}_${Date.now()}`,
+          order: idx,
+          title: s.visualPrompt || `Slide ${idx + 1}`,
+          duration: s.duration || 15,
+          narration: s.narration || '',
+          analysis: s.narration || '',
+          cameraMotion: s.visualPrompt || 'Slow Zoom In',
+          resolution: '1080p Full HD',
+          previewUrl: s.videoUrl || screenshot || '',
+          videoUrl: s.videoUrl || '',
+          screenshotUrl: screenshot,
+          rawScreenshot: screenshot,
+          audioUrl: s.audioUrl || '',
+          status: s.status === 'completed' ? 'ready' : (s.status || 'ready')
+        };
+      });
+    } else if (input.screenshots && input.screenshots.length > 0) {
+      clipsToSave = input.screenshots.map((shot, idx) => ({
+        id: `draft_slide_${idx}_${Date.now()}`,
+        order: idx,
+        title: `Slide ${idx + 1}`,
+        duration: 15,
+        narration: '',
+        analysis: '',
+        cameraMotion: 'Slow Zoom In',
+        resolution: '1080p Full HD',
+        previewUrl: shot,
+        videoUrl: '',
+        screenshotUrl: shot,
+        rawScreenshot: shot,
+        audioUrl: '',
+        status: 'ready'
+      }));
+    }
+
+    const calculatedDuration = clipsToSave.reduce((sum, c) => sum + (c.duration || 0), 0) || totalDuration;
+
+    return {
+      title: input.name || editorState.youtubeMetadata?.title || 'TourGenie 90s App Tour',
+      description: input.description || '',
+      appUrl: input.url || '',
+      script: input.script || '',
+      clips: clipsToSave,
+      scenes: state.scenes,
+      screenshots: input.screenshots,
+      totalDuration: calculatedDuration,
+      isRendered: editorState.isRendered,
+      combinedVideoUrl: editorState.combinedVideoUrl,
+      youtubeMetadata: editorState.youtubeMetadata
+    };
+  };
+
   const handleQuickSaveSession = async () => {
     if (!currentUser) {
       setIsAuthModalOpen(true);
@@ -187,20 +278,25 @@ export default function App() {
     setIsQuickSaving(true);
     setQuickSaveFeedback(null);
     try {
-      const title = input.name.trim() || editorState.youtubeMetadata?.title || 'TourGenie App Tour';
+      const project = getCompiledProject();
+      const title = input.name.trim() || editorState.youtubeMetadata?.title || project.title || 'TourGenie App Tour';
       const sessionId = await saveUserSession(currentUser.uid, {
         id: activeSessionId || `session_${Date.now()}`,
         title,
-        appDescription: input.description || '',
-        clipsCount: editorState.clips.length,
-        totalDuration,
+        appDescription: input.description || project.description || '',
+        appUrl: input.url || project.appUrl || '',
+        script: input.script || project.script || '',
+        clipsCount: project.clips.length,
+        totalDuration: project.totalDuration,
         isRendered: editorState.isRendered,
         combinedVideoUrl: editorState.combinedVideoUrl,
-        clips: editorState.clips,
+        clips: project.clips,
+        scenes: state.scenes,
+        screenshots: input.screenshots,
         youtubeMetadata: editorState.youtubeMetadata
       });
       setActiveSessionId(sessionId);
-      setQuickSaveFeedback('Saved to Cloud!');
+      setQuickSaveFeedback(`Saved ${project.clips.length} slides to Cloud!`);
       setTimeout(() => setQuickSaveFeedback(null), 3000);
     } catch (err: any) {
       console.error('Failed to save session:', err);
@@ -215,23 +311,61 @@ export default function App() {
     if (!session) return;
     const sessionId = session.id || `session_${Date.now()}`;
     setActiveSessionId(sessionId);
-    setInput(prev => ({
-      ...prev,
-      name: session.title || prev.name,
-      description: session.appDescription || prev.description
-    }));
 
+    // 1. Restore input details (Name, URL, Description, Script, Screenshots)
+    const restoredScreenshots: string[] = session.screenshots && session.screenshots.length > 0
+      ? session.screenshots
+      : (session.clips || []).map((c: any) => c.screenshotUrl || c.rawScreenshot).filter(Boolean);
+
+    setInput({
+      name: session.title || '',
+      url: session.appUrl || '',
+      description: session.appDescription || '',
+      script: session.script || '',
+      screenshots: restoredScreenshots
+    });
+
+    // 2. Restore clips for Video Editor
+    let restoredClips: EditorClip[] = [];
     if (session.clips && session.clips.length > 0) {
-      const restoredClips: EditorClip[] = session.clips.map((c: any, index: number) => ({
-        id: c?.id || `restored_${index}_${Date.now()}`,
-        duration: c?.duration || 9,
-        status: 'ready',
-        narration: c?.narration || '',
-        analysis: c?.analysis || c?.narration || '',
-        previewUrl: c?.screenshotUrl || c?.rawScreenshot || '',
-        audioUrl: c?.audioUrl || ''
-      }));
+      restoredClips = session.clips.map((c: any, index: number) => {
+        const shot = c?.screenshotUrl || c?.rawScreenshot || (restoredScreenshots[index] || '');
+        return {
+          id: c?.id || `restored_clip_${index}_${Date.now()}`,
+          duration: c?.duration || 15,
+          status: 'ready',
+          title: c?.title || c?.analysis || `Slide ${index + 1}`,
+          narration: c?.narration || '',
+          analysis: c?.analysis || c?.narration || '',
+          previewUrl: c?.previewUrl || c?.videoUrl || shot || '',
+          videoUrl: c?.videoUrl || '',
+          screenshotUrl: shot,
+          rawScreenshot: shot,
+          audioUrl: c?.audioUrl || ''
+        };
+      });
+    } else if (session.scenes && session.scenes.length > 0) {
+      // If clips array was empty but scenes existed
+      restoredClips = session.scenes.map((s: any, index: number) => {
+        const shotIndex = s.screenshotIndex !== undefined ? s.screenshotIndex : index;
+        const shot = (restoredScreenshots[shotIndex] || restoredScreenshots[index % (restoredScreenshots.length || 1)]) || '';
+        return {
+          id: s.id || `restored_scene_${index}_${Date.now()}`,
+          duration: s.duration || 15,
+          status: 'ready',
+          title: s.visualPrompt || `Slide ${index + 1}`,
+          narration: s.narration || '',
+          analysis: s.visualPrompt || s.narration || '',
+          previewUrl: s.videoUrl || shot || '',
+          videoUrl: s.videoUrl || '',
+          screenshotUrl: shot,
+          rawScreenshot: shot,
+          audioUrl: s.audioUrl || ''
+        };
+      });
+    }
 
+    if (restoredClips.length > 0) {
       setEditorState({
         clips: restoredClips,
         isProcessing: false,
@@ -241,10 +375,59 @@ export default function App() {
         combinedVideoUrl: session.combinedVideoUrl || undefined,
         youtubeMetadata: session.youtubeMetadata || undefined
       });
-
-      setActiveTab('editor');
     }
-    setQuickSaveFeedback(`Loaded: ${session.title || 'Tour'}`);
+
+    // 3. Restore scenes for Tour Creator storyboard
+    let restoredScenes: Scene[] = [];
+    if (session.scenes && session.scenes.length > 0) {
+      restoredScenes = session.scenes.map((s: any, index: number) => ({
+        id: s.id || `restored_scene_${index}`,
+        timestamp: s.timestamp || `0:${(index * 15).toString().padStart(2, '0')}`,
+        duration: s.duration || 15,
+        visualPrompt: s.visualPrompt || `Slide ${index + 1}`,
+        narration: s.narration || '',
+        videoUrl: s.videoUrl || '',
+        audioUrl: s.audioUrl || '',
+        status: (s.status as any) || 'completed',
+        screenshotIndex: s.screenshotIndex !== undefined ? s.screenshotIndex : index
+      }));
+    } else if (restoredClips.length > 0) {
+      // Synthesize scenes from restored clips so the storyboard is also complete
+      restoredScenes = restoredClips.map((c, index) => ({
+        id: c.id || `synth_scene_${index}`,
+        timestamp: `0:${(index * 15).toString().padStart(2, '0')}`,
+        duration: c.duration || 15,
+        visualPrompt: c.title || c.analysis || `Slide ${index + 1}`,
+        narration: c.narration || '',
+        videoUrl: c.videoUrl || (c.previewUrl?.startsWith('data:video') || c.previewUrl?.endsWith('.mp4') ? c.previewUrl : ''),
+        audioUrl: c.audioUrl || '',
+        status: 'completed',
+        screenshotIndex: index
+      }));
+    }
+
+    if (restoredScenes.length > 0) {
+      setState({
+        step: 'final',
+        scenes: restoredScenes,
+        progress: 100
+      });
+    } else {
+      setState({
+        step: 'input',
+        scenes: [],
+        progress: 0
+      });
+    }
+
+    // 4. Tab navigation & user feedback
+    if (restoredClips.length > 0) {
+      setActiveTab('editor');
+      setQuickSaveFeedback(`Loaded ${restoredClips.length} slides from "${session.title || 'Tour'}"`);
+    } else {
+      setActiveTab('creator');
+      setQuickSaveFeedback(`Loaded: "${session.title || 'Tour'}" (Draft session without pre-rendered slides)`);
+    }
     setTimeout(() => setQuickSaveFeedback(null), 3500);
   };
 
@@ -397,9 +580,28 @@ export default function App() {
         setRenderProgress(10 + Math.floor(((i + 1) / totalClips) * 25));
         
         try {
-          const res = await fetch(clip.previewUrl);
-          const blob = await res.blob();
-          clipBlobs.push(blob);
+          let videoUrl = clip.videoUrl || clip.previewUrl;
+          const isImage = !videoUrl || videoUrl.startsWith('data:image') || videoUrl.endsWith('.png') || videoUrl.endsWith('.jpg') || videoUrl.endsWith('.jpeg');
+
+          if (isImage) {
+            const shot = clip.screenshotUrl || clip.rawScreenshot || clip.previewUrl;
+            if (shot) {
+              setRenderStage(`Generating animation for Scene ${i + 1}...`);
+              videoUrl = await tourService.generateSceneVideo(
+                { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
+                shot,
+                { duration: clip.duration || 15, audioBase64: clip.audioUrl, sceneIndex: i }
+              );
+              clip.videoUrl = videoUrl;
+              clip.previewUrl = videoUrl;
+            }
+          }
+
+          if (videoUrl) {
+            const res = await fetch(videoUrl);
+            const blob = await res.blob();
+            clipBlobs.push(blob);
+          }
         } catch (fetchErr) {
           console.warn(`Could not fetch blob for clip ${i}:`, fetchErr);
         }
@@ -1026,8 +1228,8 @@ export default function App() {
                       <FilmIcon className="w-4 h-4" /> Open in Video Editor ({state.scenes.length} Scenes)
                     </button>
                     <button
-                      onClick={() => {
-                        sendScenesToEditor();
+                      onClick={async () => {
+                        await sendScenesToEditor();
                         if (!currentUser) {
                           setIsAuthModalOpen(true);
                         } else {
@@ -1227,7 +1429,11 @@ export default function App() {
                       {editorState.clips.map((clip, idx) => (
                         <div key={clip.id} className="group relative bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col sm:flex-row gap-5 items-start transition hover:border-indigo-200 hover:bg-white hover:shadow-md">
                           <div className="w-full sm:w-56 aspect-video rounded-xl overflow-hidden bg-black flex-shrink-0 relative shadow-inner">
-                            <video src={clip.previewUrl} className="w-full h-full object-contain" controls />
+                            {clip.previewUrl && (clip.previewUrl.startsWith('data:image') || clip.previewUrl.endsWith('.png') || clip.previewUrl.endsWith('.jpg') || clip.previewUrl.endsWith('.jpeg') || clip.previewUrl.endsWith('.webp')) ? (
+                              <img src={clip.previewUrl} alt={clip.title || `Slide ${idx + 1}`} className="w-full h-full object-contain" />
+                            ) : (
+                              <video src={clip.previewUrl} className="w-full h-full object-contain" controls />
+                            )}
                             <div className="absolute top-2 right-2 bg-black/60 px-2 py-0.5 rounded-lg text-[10px] text-white font-bold backdrop-blur-sm">
                                 {Math.floor(clip.duration)}s
                             </div>
@@ -1534,21 +1740,38 @@ export default function App() {
                       <div ref={previewScrollRef} className="absolute inset-0 flex flex-col overflow-y-auto snap-y snap-mandatory scroll-smooth hide-scrollbar">
                         {editorState.clips.map((clip, idx) => (
                             <div key={clip.id} className="min-h-full w-full relative snap-start flex items-center justify-center bg-black group/scene">
-                                <video 
-                                  src={clip.previewUrl} 
-                                  className="w-full h-full object-contain" 
-                                  controls 
-                                  autoPlay={idx === 0}
-                                  onEnded={(e) => {
-                                      // Seamless sequential playback simulation
-                                      const next = e.currentTarget.parentElement?.nextElementSibling;
-                                      if (next) {
-                                          next.scrollIntoView({ behavior: 'smooth' });
-                                          const nextVideo = next.querySelector('video');
-                                          if (nextVideo) nextVideo.play();
-                                      }
-                                  }}
-                                />
+                                {clip.previewUrl && (clip.previewUrl.startsWith('data:image') || clip.previewUrl.endsWith('.png') || clip.previewUrl.endsWith('.jpg') || clip.previewUrl.endsWith('.jpeg') || clip.previewUrl.endsWith('.webp')) ? (
+                                  <div className="w-full h-full flex flex-col items-center justify-center relative">
+                                    <img src={clip.previewUrl} alt={clip.title || `Slide ${idx + 1}`} className="w-full h-full object-contain" />
+                                    {clip.audioUrl && (
+                                      <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-700/60 flex items-center justify-between gap-3 z-20">
+                                        <span className="text-xs text-slate-300 truncate font-medium">Slide {idx + 1} Voiceover</span>
+                                        <button
+                                          onClick={() => playAudioPreview(clip.audioUrl)}
+                                          className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                                        >
+                                          <SpeakerWaveIcon className="w-3.5 h-3.5" /> Play Voiceover
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <video 
+                                    src={clip.previewUrl || clip.videoUrl} 
+                                    className="w-full h-full object-contain" 
+                                    controls 
+                                    autoPlay={idx === 0}
+                                    onEnded={(e) => {
+                                        // Seamless sequential playback simulation
+                                        const next = e.currentTarget.parentElement?.nextElementSibling;
+                                        if (next) {
+                                            next.scrollIntoView({ behavior: 'smooth' });
+                                            const nextVideo = next.querySelector('video');
+                                            if (nextVideo) nextVideo.play();
+                                        }
+                                    }}
+                                  />
+                                )}
                                 
                                 {/* Overlay Controls */}
                                 <div className="absolute top-10 left-10 flex flex-col gap-3 pointer-events-none group-hover/scene:opacity-100 opacity-0 transition-opacity duration-300">
@@ -1631,15 +1854,7 @@ export default function App() {
         onClose={() => setIsSessionsModalOpen(false)}
         userId={currentUser?.uid || ''}
         onLoadSession={handleLoadSession}
-        currentProject={{
-          title: input.name || editorState.youtubeMetadata?.title || 'TourGenie 90s App Tour',
-          description: input.description || '',
-          clips: editorState.clips,
-          totalDuration,
-          isRendered: editorState.isRendered,
-          combinedVideoUrl: editorState.combinedVideoUrl,
-          youtubeMetadata: editorState.youtubeMetadata
-        }}
+        currentProject={getCompiledProject()}
         onSessionSaved={(sessionId) => {
           setActiveSessionId(sessionId);
           setQuickSaveFeedback('Project saved to cloud!');

@@ -37,7 +37,11 @@ interface SavedSessionsModalProps {
   currentProject: {
     title: string;
     description: string;
+    appUrl?: string;
+    script?: string;
     clips: any[];
+    scenes?: any[];
+    screenshots?: string[];
     totalDuration: number;
     isRendered: boolean;
     combinedVideoUrl?: string;
@@ -114,15 +118,25 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
     setIsSaving(true);
     setSaveSuccess(false);
     try {
+      const slidesCount = Math.max(
+        currentProject.clips?.length || 0,
+        currentProject.scenes?.length || 0,
+        currentProject.screenshots?.length || 0
+      );
+
       const newSessionId = await saveUserSession(userId, {
         id: `session_${Date.now()}`,
         title: saveTitle.trim() || "TourGenie App Tour",
         appDescription: currentProject.description || "",
-        clipsCount: currentProject.clips?.length || 0,
+        appUrl: currentProject.appUrl || "",
+        script: currentProject.script || "",
+        clipsCount: slidesCount,
         totalDuration: currentProject.totalDuration || 0,
         isRendered: currentProject.isRendered,
         combinedVideoUrl: currentProject.combinedVideoUrl,
         clips: currentProject.clips || [],
+        scenes: currentProject.scenes || [],
+        screenshots: currentProject.screenshots || [],
         youtubeMetadata: currentProject.youtubeMetadata,
         sharedWithEmails: [],
         isPublic: false
@@ -229,7 +243,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
             <div className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2 flex items-center justify-between">
               <span>Save Current Project</span>
               <span className="text-[11px] font-medium text-slate-400">
-                {currentProject.clips.length} Scenes • {Math.floor(currentProject.totalDuration)}s Total
+                {currentProject.clips?.length || currentProject.scenes?.length || currentProject.screenshots?.length || 0} Slides • {Math.floor(currentProject.totalDuration)}s Total
               </span>
             </div>
             <div className="flex gap-2">
@@ -359,7 +373,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
               </div>
             ) : (
               displayedSessions.map((s, idx) => {
-                const safeId = s.id || `session_${idx}`;
+                const safeId = String(s?.id || `session_${idx}`);
                 const isOwner = s.userId === userId;
                 const sharedCount = s.sharedWithEmails?.length || 0;
                 return (
@@ -402,7 +416,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                       <div className="flex items-center gap-3 text-xs text-slate-400 dark:text-slate-500 mt-1 flex-wrap">
                         <span className="flex items-center gap-1 font-medium">
                           <FilmIcon className="w-3.5 h-3.5 text-indigo-500" />
-                          {s.clipsCount || (s.clips?.length || 0)} Scenes
+                          {s.clips?.length || s.scenes?.length || s.clipsCount || 0} Slides
                         </span>
                         <span>•</span>
                         <span className="flex items-center gap-1 font-medium">
