@@ -35,11 +35,14 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
 // Use the designated Firestore Database ID
-export const db = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+const dbId = (firebaseConfig as any).firestoreDatabaseId;
+export const db = dbId 
+  ? getFirestore(app, dbId)
   : getFirestore(app);
 
 const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope("https://www.googleapis.com/auth/youtube.upload");
+googleProvider.addScope("https://www.googleapis.com/auth/youtube.readonly");
 googleProvider.setCustomParameters({ prompt: "select_account" });
 
 // Error handling conforming to Firebase Integration Skill
@@ -264,6 +267,16 @@ export async function loginWithGoogle(): Promise<User> {
   }
   
   return user;
+}
+
+export async function authorizeYouTubeChannel(): Promise<{ user: User; accessToken: string }> {
+  const result = await signInWithPopup(auth, googleProvider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  const accessToken = credential?.accessToken;
+  if (!accessToken) {
+    throw new Error("Unable to retrieve YouTube authorization. Please allow the Google popup and accept the requested YouTube permissions.");
+  }
+  return { user: result.user, accessToken };
 }
 
 export async function loginAsGuest(): Promise<User> {

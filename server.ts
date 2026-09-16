@@ -577,6 +577,154 @@ async function startServer() {
     }
   });
 
+  // 9. Fetch Authenticated YouTube Channel
+  app.get("/api/youtube-channel", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: "Missing Authorization header with Google OAuth Bearer token." });
+    }
+
+    try {
+      const ytRes = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true", {
+        headers: {
+          Authorization: authHeader
+        }
+      });
+
+      const data = await ytRes.json();
+      if (!ytRes.ok) {
+        return res.status(ytRes.status).json({
+          error: data.error?.message || "Failed to fetch YouTube channel info."
+        });
+      }
+
+      res.json(data);
+    } catch (err: any) {
+      console.error("Error in /api/youtube-channel:", err);
+      res.status(500).json({ error: err.message || "Failed to contact YouTube Data API" });
+    }
+  });
+
+  // 10. Real YouTube Video Upload (Resumable Upload Protocol)
+  app.post("/api/youtube-upload", upload.single("video"), async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+      }
+      return res.status(401).json({ error: "Missing Authorization header with Google OAuth Bearer token." });
+    }
+
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: "No video file provided for YouTube upload." });
+    }
+
+    try {
+      const title = String(req.body.title || "TourGenie 90s App Tour").slice(0, 100);
+      const description = String(req.body.description || "Created with TourGenie App Tour Studio").slice(0, 5000);
+      let tags: string[] = [];
+      if (req.body.tags) {
+        try {
+          const parsedTags = JSON.parse(req.body.tags);
+          if (Array.isArray(parsedTags)) {
+            tags = parsedTags.map(t => String(t).trim()).filter(Boolean).slice(0, 30);
+          }
+        } catch (e) {
+          if (typeof req.body.tags === 'string') {
+            tags = req.body.tags.split(',').map((t: string) => t.trim()).filter(Boolean).slice(0, 30);
+          }
+        }
+      }
+      const privacyStatus = ['public', 'private', 'unlisted'].includes(req.body.privacyStatus) 
+        ? req.body.privacyStatus 
+        : 'unlisted';
+
+      console.log(`[YouTube API] Initiating resumable upload for "${title}" (${file.size} bytes, privacy: ${privacyStatus})...`);
+
+      // Step 1: Initiate Resumable Upload Session
+      const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+        method: "POST",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Length": String(file.size),
+          "X-Upload-Content-Type": "video/mp4"
+        },
+        body: JSON.stringify({
+          snippet: {
+            title,
+            description,
+            tags,
+            categoryId: "28" // Science & Technology
+          },
+          status: {
+            privacyStatus,
+            selfDeclaredMadeForKids: false
+          }
+        })
+      });
+
+      if (!initRes.ok) {
+        const errData = await initRes.json().catch(() => ({}));
+        try { fs.unlinkSync(file.path); } catch (e) {}
+        console.error("[YouTube API] Initiation failed:", errData);
+        return res.status(initRes.status).json({
+          error: errData.error?.message || "YouTube upload initiation failed"
+        });
+      }
+
+      const uploadUrl = initRes.headers.get("location");
+      if (!uploadUrl) {
+        try { fs.unlinkSync(file.path); } catch (e) {}
+        throw new Error("YouTube did not provide a resumable upload location URL.");
+      }
+
+      console.log("[YouTube API] Upload session initialized, sending video stream...");
+
+      // Step 2: Transfer Video Binary
+      const videoBuffer = fs.readFileSync(file.path);
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "video/mp4",
+          "Content-Length": String(videoBuffer.length)
+        },
+        body: videoBuffer
+      });
+
+      // Cleanup local temp file
+      try { fs.unlinkSync(file.path); } catch (e) {}
+
+      const uploadData = await uploadRes.json().catch(() => ({}));
+      if (!uploadRes.ok) {
+        console.error("[YouTube API] Video transfer failed:", uploadData);
+        return res.status(uploadRes.status).json({
+          error: uploadData.error?.message || "YouTube video processing failed"
+        });
+      }
+
+      const videoId = uploadData.id;
+      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      console.log(`[YouTube API] Video published successfully! ID: ${videoId} -> ${videoUrl}`);
+
+      res.json({
+        success: true,
+        videoId,
+        videoUrl,
+        title: uploadData.snippet?.title || title,
+        privacyStatus: uploadData.status?.privacyStatus || privacyStatus
+      });
+    } catch (err: any) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+      }
+      console.error("[YouTube API] Error:", err);
+      res.status(500).json({ error: err.message || "Failed to upload video to YouTube" });
+    }
+  });
+
   // --- Vite Middleware for Development / Static serving for Production ---
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

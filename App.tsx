@@ -8,6 +8,7 @@ import { AuthModal } from './components/AuthModal';
 import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { SaveSessionDialog } from './components/SaveSessionDialog';
 import { MasterVideoPlayer } from './components/MasterVideoPlayer';
+import { YouTubePublishModal } from './components/YouTubePublishModal';
 import { 
   PlusIcon, 
   SparklesIcon, 
@@ -55,11 +56,8 @@ export default function App() {
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderStage, setRenderStage] = useState('');
 
-  // Upload Simulation State
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStage, setUploadStage] = useState('');
-  const [isUploadComplete, setIsUploadComplete] = useState(false);
+  // YouTube Publishing Modal State
+  const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
   
   // Tour Creator State
   const [input, setInput] = useState<AppInput>({
@@ -779,39 +777,13 @@ export default function App() {
     }
   };
 
-  // --- YouTube Upload Simulation ---
-  const handleYouTubePublish = async () => {
+  // --- Real YouTube Data API v3 Publish Flow ---
+  const handleOpenYouTubePublish = () => {
     if (!isDurationValid || !editorState.isRendered) {
-      if (!editorState.isRendered) setError("Assembly required: Please render your project before publishing.");
+      if (!editorState.isRendered) setError("Assembly required: Please render and stitch your project before publishing.");
       return;
     }
-    
-    setIsUploading(true);
-    setUploadProgress(0);
-    setIsUploadComplete(false);
-    
-    const stages = [
-      { msg: 'Initializing YouTube Data API...', duration: 1500 },
-      { msg: 'Pre-flight master file check...', duration: 1000 },
-      { msg: 'Syncing AI-Optimized Metadata...', duration: 2000 },
-      { msg: 'Transferring Master Video Project...', duration: 4000 },
-      { msg: 'Finalizing Broadcast Processing...', duration: 1500 }
-    ];
-
-    let currentProgress = 0;
-    for (const stage of stages) {
-      setUploadStage(stage.msg);
-      const startTime = Date.now();
-      while (Date.now() - startTime < stage.duration) {
-        currentProgress = Math.min(currentProgress + (Math.random() * 2.5), 99);
-        setUploadProgress(Math.floor(currentProgress));
-        await new Promise(r => setTimeout(r, 100));
-      }
-    }
-
-    setUploadProgress(100);
-    setUploadStage('Broadcast Ready!');
-    setTimeout(() => setIsUploadComplete(true), 800);
+    setIsYouTubeModalOpen(true);
   };
 
   // Helper: Normalize uploaded screenshots to standard 16:9 canvas to prevent video model outpainting hallucinations
@@ -1762,7 +1734,7 @@ export default function App() {
                         
                         <button 
                           disabled={!isDurationValid || !editorState.isRendered}
-                          onClick={handleYouTubePublish}
+                          onClick={handleOpenYouTubePublish}
                           className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${isDurationValid && editorState.isRendered ? 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'}`}
                         >
                           <PlayIcon className="w-6 h-6 fill-current" />
@@ -1808,43 +1780,6 @@ export default function App() {
                 </div>
               </div>
            </div>
-        </div>
-      )}
-
-      {/* UPLOAD MODAL */}
-      {isUploading && (
-        <div className="fixed inset-0 z-[130] bg-slate-950/98 backdrop-blur-3xl flex items-center justify-center p-6 animate-in fade-in duration-300">
-          <div className="max-w-md w-full glass p-10 rounded-[3rem] border border-white/10 text-center space-y-10 shadow-2xl">
-            {!isUploadComplete ? (
-              <>
-                <div className="relative w-40 h-40 mx-auto">
-                   <div className="absolute inset-0 border-[10px] border-white/5 rounded-full" />
-                   <div className="absolute inset-0 border-[10px] border-red-600 rounded-full transition-all duration-500 shadow-[0_0_30px_rgba(220,38,38,0.3)]" style={{ clipPath: `conic-gradient(white ${uploadProgress}%, transparent 0)` }} />
-                   <div className="absolute inset-0 flex items-center justify-center">
-                    <ArrowUpTrayIcon className="w-16 h-16 text-white animate-bounce" />
-                   </div>
-                </div>
-                <div className="space-y-2">
-                  <h2 className="text-3xl font-black text-white mb-2">Broadcasting Tour</h2>
-                  <p className="text-red-500 text-sm font-bold uppercase tracking-widest h-5">{uploadStage}</p>
-                </div>
-                <div className="w-full bg-white/5 rounded-full h-3 overflow-hidden border border-white/10">
-                  <div className="h-full bg-red-600 transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
-                </div>
-              </>
-            ) : (
-              <div className="animate-in zoom-in duration-500 space-y-8 py-4">
-                <div className="w-24 h-24 bg-green-500/20 rounded-full flex items-center justify-center mx-auto shadow-[0_0_40px_rgba(34,197,94,0.3)] border-2 border-green-500/50">
-                  <CheckCircleIcon className="w-16 h-16 text-green-500" />
-                </div>
-                <div className="space-y-2">
-                  <h2 className="text-4xl font-black text-white">Tour Live!</h2>
-                  <p className="text-slate-400 text-sm font-medium px-4">Your master tour has been processed and is now available to your global audience.</p>
-                </div>
-                <button onClick={() => setIsUploading(false)} className="w-full bg-white text-slate-900 font-black py-5 rounded-[1.5rem] shadow-2xl hover:bg-slate-50 transition active:scale-95 text-sm uppercase tracking-widest">Return to Projects</button>
-              </div>
-            )}
-          </div>
         </div>
       )}
 
@@ -1982,13 +1917,29 @@ export default function App() {
 
                   <div className="flex items-center gap-4">
                     {editorState.isRendered && editorState.combinedVideoUrl && (
-                      <a
-                        href={editorState.combinedVideoUrl}
-                        download={`${editorState.youtubeMetadata?.title || 'TourGenie_Master_Tour'}.mp4`}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-2 transition active:scale-95 shadow-lg"
-                      >
-                        <ArrowDownTrayIcon className="w-4 h-4" /> Download Master File (All {editorState.clips.length} Scenes)
-                      </a>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsPreviewOpen(false);
+                            setIsYouTubeModalOpen(true);
+                          }}
+                          className="bg-red-600 hover:bg-red-500 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-2 transition active:scale-95 shadow-lg shadow-red-600/20"
+                        >
+                          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                          </svg>
+                          Push to YouTube
+                        </button>
+
+                        <a
+                          href={editorState.combinedVideoUrl}
+                          download={`${editorState.youtubeMetadata?.title || 'TourGenie_Master_Tour'}.mp4`}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-2 transition active:scale-95 shadow-lg"
+                        >
+                          <ArrowDownTrayIcon className="w-4 h-4" /> Download Master File (All {editorState.clips.length} Scenes)
+                        </a>
+                      </>
                     )}
                     {!editorState.isRendered && isDurationValid && (
                       <button
@@ -2048,6 +1999,18 @@ export default function App() {
           setQuickSaveFeedback('Project saved to cloud!');
           setTimeout(() => setQuickSaveFeedback(null), 3500);
         }}
+      />
+
+      {/* YOUTUBE PUBLISHING MODAL (REAL GOOGLE OAUTH & YOUTUBE DATA API V3) */}
+      <YouTubePublishModal
+        isOpen={isYouTubeModalOpen}
+        onClose={() => setIsYouTubeModalOpen(false)}
+        combinedVideoUrl={editorState.combinedVideoUrl || ''}
+        defaultTitle={editorState.youtubeMetadata?.title || input.name || 'TourGenie 90s App Tour'}
+        defaultDescription={editorState.youtubeMetadata?.description || ''}
+        defaultTags={editorState.youtubeMetadata?.tags || ['apptour', 'saas', 'software', 'tutorial']}
+        totalClipsCount={editorState.clips.length}
+        totalDurationSeconds={totalDuration}
       />
 
       <footer className="fixed bottom-6 left-6 z-[60] flex gap-3">
