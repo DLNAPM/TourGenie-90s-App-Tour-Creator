@@ -515,3 +515,166 @@ function roundRect(
   ctx.quadraticCurveTo(x, y, x + radius, y);
   ctx.closePath();
 }
+
+/**
+ * In-browser canvas/audio sequential stitcher as client-side fallback
+ * Plays and records each scene clip sequentially into one combined master video blob
+ */
+export async function stitchClipsClientSide(
+  clipUrls: string[],
+  onProgress?: (stage: string, percent: number) => void
+): Promise<string> {
+  if (clipUrls.length === 0) {
+    throw new Error('No clips to stitch');
+  }
+  if (clipUrls.length === 1) {
+    return clipUrls[0];
+  }
+
+  const width = 1280;
+  const height = 720;
+  const fps = 30;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) throw new Error('Canvas context unavailable');
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const mimeType = getBestVideoMimeType() || 'video/webm';
+  const stream = canvas.captureStream(fps);
+
+  const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+  const audioContext = AudioCtxClass ? new AudioCtxClass() : null;
+  const audioDest = audioContext ? audioContext.createMediaStreamDestination() : null;
+  if (audioDest) {
+    const audioTrack = audioDest.stream.getAudioTracks()[0];
+    if (audioTrack) {
+      stream.addTrack(audioTrack);
+    }
+  }
+
+  const mediaRecorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 6_000_000
+  });
+
+  const chunks: Blob[] = [];
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) chunks.push(e.data);
+  };
+
+  const recordingPromise = new Promise<string>((resolve, reject) => {
+    mediaRecorder.onstop = () => {
+      try {
+        if (audioContext && audioContext.state !== 'closed') {
+          audioContext.close().catch(() => {});
+        }
+        const blob = new Blob(chunks, { type: mimeType });
+        resolve(URL.createObjectURL(blob));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    mediaRecorder.onerror = (e) => reject(e);
+  });
+
+  mediaRecorder.start();
+
+  const hiddenVideo = document.createElement('video');
+  hiddenVideo.crossOrigin = 'anonymous';
+  hiddenVideo.playsInline = true;
+  hiddenVideo.muted = false;
+
+  if (audioContext && audioDest) {
+    try {
+      const audioSource = audioContext.createMediaElementSource(hiddenVideo);
+      audioSource.connect(audioDest);
+    } catch (e) {
+      console.warn('Could not connect media element source:', e);
+    }
+  }
+
+  for (let i = 0; i < clipUrls.length; i++) {
+    const url = clipUrls[i];
+    const pct = Math.floor((i / clipUrls.length) * 100);
+    if (onProgress) onProgress(`Assembling scene ${i + 1} of ${clipUrls.length}...`, pct);
+
+    await new Promise<void>((resolveClip) => {
+      let isEnded = false;
+      let animFrameId = 0;
+
+      const drawLoop = () => {
+        if (isEnded) return;
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(0, 0, width, height);
+
+        if (hiddenVideo.readyState >= 2) {
+          const vWidth = hiddenVideo.videoWidth || width;
+          const vHeight = hiddenVideo.videoHeight || height;
+          const vRatio = vWidth / vHeight;
+          const targetRatio = width / height;
+
+          let dw = width;
+          let dh = height;
+          let dx = 0;
+          let dy = 0;
+
+          if (vRatio > targetRatio) {
+            dh = width / vRatio;
+            dy = (height - dh) / 2;
+          } else {
+            dw = height * vRatio;
+            dx = (width - dw) / 2;
+          }
+
+          ctx.drawImage(hiddenVideo, dx, dy, dw, dh);
+        }
+
+        animFrameId = requestAnimationFrame(drawLoop);
+      };
+
+      hiddenVideo.onended = () => {
+        if (isEnded) return;
+        isEnded = true;
+        cancelAnimationFrame(animFrameId);
+        resolveClip();
+      };
+
+      hiddenVideo.onerror = () => {
+        console.warn(`Error playing clip ${i}, skipping to next`);
+        if (isEnded) return;
+        isEnded = true;
+        cancelAnimationFrame(animFrameId);
+        resolveClip();
+      };
+
+      hiddenVideo.src = url;
+      hiddenVideo.load();
+      hiddenVideo.play().then(() => {
+        drawLoop();
+      }).catch((playErr) => {
+        console.warn(`Autoplay on clip ${i}:`, playErr);
+        setTimeout(() => {
+          if (!isEnded) {
+            isEnded = true;
+            cancelAnimationFrame(animFrameId);
+            resolveClip();
+          }
+        }, 1500);
+      });
+    });
+  }
+
+  setTimeout(() => {
+    if (mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+  }, 200);
+
+  return await recordingPromise;
+}
+
