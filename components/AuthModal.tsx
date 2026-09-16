@@ -5,6 +5,7 @@ import {
   loginWithEmail, 
   signupWithEmail 
 } from "../services/firebase";
+import firebaseConfig from "../firebase-applet-config.json";
 import { 
   XMarkIcon, 
   SparklesIcon, 
@@ -38,7 +39,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   if (!isOpen) return null;
 
   const currentHostname = typeof window !== "undefined" ? window.location.hostname : "";
-  const firebaseSettingsUrl = "https://console.firebase.google.com/project/whats-my-credit-worth/authentication/settings";
+  const projectId = firebaseConfig.projectId || "gen-lang-client-0034495083";
+  const firebaseSettingsUrl = `https://console.firebase.google.com/project/${projectId}/authentication/settings`;
 
   const handleCopyDomain = () => {
     if (!currentHostname) return;
