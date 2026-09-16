@@ -7,6 +7,7 @@ import { auth, logoutUser, saveUserSession, getUserSessions, getSessionById, get
 import { AuthModal } from './components/AuthModal';
 import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { SaveSessionDialog } from './components/SaveSessionDialog';
+import { MasterVideoPlayer } from './components/MasterVideoPlayer';
 import { 
   PlusIcon, 
   SparklesIcon, 
@@ -770,6 +771,7 @@ export default function App() {
         combinedVideoUrl: masterUrl || prev.clips[0]?.previewUrl
       }));
       setPreviewMode('master');
+      setIsPreviewOpen(true);
     } catch (err: any) {
       console.error('Master assembly error:', err);
       setEditorState(prev => ({ ...prev, isRendering: false }));
@@ -1528,6 +1530,59 @@ export default function App() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               <div className="lg:col-span-2 space-y-6">
+                {/* Master Tour Broadcast Card (Visible when Master Video is Rendered) */}
+                {editorState.isRendered && editorState.combinedVideoUrl && (
+                  <div className="bg-slate-950 text-white rounded-3xl p-6 border border-indigo-500/30 shadow-2xl space-y-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-emerald-500 flex items-center justify-center shadow-lg shadow-indigo-600/30">
+                          <PlayIcon className="w-5 h-5 text-white fill-current" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-black tracking-tight text-white">
+                              Master Broadcast Video
+                            </h3>
+                            <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-emerald-500/30 uppercase tracking-wide">
+                              All {editorState.clips.length} Scenes Stitched
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400">
+                            Navigate scenes using Rewind (⟲ 10s, ⟲ 5s), Forward (⟳ 5s, ⟳ 10s), or Scene Jump controls.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setPreviewMode('master');
+                            setIsPreviewOpen(true);
+                          }}
+                          className="bg-white/10 hover:bg-white/20 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-white/10 active:scale-95"
+                        >
+                          <EyeIcon className="w-4 h-4 text-indigo-400" />
+                          <span>Fullscreen Modal</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <MasterVideoPlayer
+                      key={editorState.combinedVideoUrl}
+                      src={editorState.combinedVideoUrl}
+                      clips={editorState.clips}
+                      title={editorState.youtubeMetadata?.title || 'TourGenie Master Tour'}
+                      autoPlay={false}
+                      showSceneBar={true}
+                      onDownload={() => {
+                        const link = document.createElement('a');
+                        link.href = editorState.combinedVideoUrl!;
+                        link.download = `${editorState.youtubeMetadata?.title || 'TourGenie_Master_Tour'}.mp4`;
+                        link.click();
+                      }}
+                    />
+                  </div>
+                )}
+
                 <div className="bg-white rounded-3xl border border-slate-200 p-8 min-h-[400px] shadow-sm">
                   {editorState.clips.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-center space-y-4 py-20">
@@ -1834,87 +1889,87 @@ export default function App() {
                     </div>
                 </div>
                 
-                <div className="bg-black rounded-[3rem] overflow-hidden aspect-video border border-white/10 relative shadow-[0_40px_80px_rgba(0,0,0,0.8)] ring-1 ring-white/10 flex items-center justify-center">
-                    {previewMode === 'master' && editorState.isRendered && editorState.combinedVideoUrl ? (
-                      <div className="w-full h-full relative flex items-center justify-center bg-black">
-                        <video 
-                          key={editorState.combinedVideoUrl}
-                          src={editorState.combinedVideoUrl} 
-                          className="w-full h-full object-contain" 
-                          controls 
-                          autoPlay 
-                          playsInline
-                        />
-                        <div className="absolute top-6 left-6 pointer-events-none">
-                          <div className="bg-emerald-600/90 backdrop-blur-xl rounded-xl px-4 py-2 text-white border border-white/20 shadow-lg inline-flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                            <span className="text-xs font-bold uppercase tracking-wider">Master Broadcast ({editorState.clips.length} Scenes Stitched)</span>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div ref={previewScrollRef} className="absolute inset-0 flex flex-col overflow-y-auto snap-y snap-mandatory scroll-smooth hide-scrollbar">
-                        {editorState.clips.map((clip, idx) => (
-                            <div key={clip.id} className="min-h-full w-full relative snap-start flex items-center justify-center bg-black group/scene">
-                                {clip.previewUrl && (clip.previewUrl.startsWith('data:image') || clip.previewUrl.endsWith('.png') || clip.previewUrl.endsWith('.jpg') || clip.previewUrl.endsWith('.jpeg') || clip.previewUrl.endsWith('.webp')) ? (
-                                  <div className="w-full h-full flex flex-col items-center justify-center relative">
-                                    <img src={clip.previewUrl} alt={clip.title || `Slide ${idx + 1}`} className="w-full h-full object-contain" />
-                                    {(clip.audioUrl || clip.narration) && (
-                                      <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-700/60 flex items-center justify-between gap-3 z-20">
-                                        <span className="text-xs text-slate-300 truncate font-medium">Slide {idx + 1} Voiceover</span>
-                                        <button
-                                          onClick={() => playAudioPreview(clip.audioUrl, clip.narration, (gen) => {
-                                            setEditorState(prev => ({
-                                              ...prev,
-                                              clips: prev.clips.map((c, i) => i === idx ? { ...c, audioUrl: gen } : c)
-                                            }));
-                                          })}
-                                          className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5"
-                                        >
-                                          <SpeakerWaveIcon className="w-3.5 h-3.5" /> Play Voiceover
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <video 
-                                    src={clip.previewUrl || clip.videoUrl} 
-                                    className="w-full h-full object-contain" 
-                                    controls 
-                                    autoPlay={idx === 0}
-                                    onEnded={(e) => {
-                                        // Seamless sequential playback simulation
-                                        const next = e.currentTarget.parentElement?.nextElementSibling;
-                                        if (next) {
-                                            next.scrollIntoView({ behavior: 'smooth' });
-                                            const nextVideo = next.querySelector('video');
-                                            if (nextVideo) nextVideo.play();
-                                        }
-                                    }}
-                                  />
-                                )}
-                                
-                                {/* Overlay Controls */}
-                                <div className="absolute top-10 left-10 flex flex-col gap-3 pointer-events-none group-hover/scene:opacity-100 opacity-0 transition-opacity duration-300">
-                                    <div className="bg-indigo-600/90 backdrop-blur-xl shadow-[0_10px_30px_rgba(79,70,229,0.4)] rounded-2xl px-5 py-3 text-white inline-flex flex-col border border-white/20">
-                                        <p className="text-[9px] font-black uppercase tracking-widest opacity-80 mb-0.5">Scene {idx+1} of {editorState.clips.length}</p>
-                                        <p className="text-lg font-black">{Math.floor(clip.duration)}.0s</p>
+                {previewMode === 'master' && editorState.isRendered && editorState.combinedVideoUrl ? (
+                  <div className="w-full flex flex-col gap-4">
+                    <MasterVideoPlayer
+                      key={editorState.combinedVideoUrl}
+                      src={editorState.combinedVideoUrl}
+                      clips={editorState.clips}
+                      title={editorState.youtubeMetadata?.title || 'TourGenie Master App Tour'}
+                      autoPlay={true}
+                      showSceneBar={true}
+                      onDownload={() => {
+                        const link = document.createElement('a');
+                        link.href = editorState.combinedVideoUrl!;
+                        link.download = `${editorState.youtubeMetadata?.title || 'TourGenie_Master_Tour'}.mp4`;
+                        link.click();
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="bg-black rounded-[3rem] overflow-hidden aspect-video border border-white/10 relative shadow-[0_40px_80px_rgba(0,0,0,0.8)] ring-1 ring-white/10 flex items-center justify-center">
+                    <div ref={previewScrollRef} className="absolute inset-0 flex flex-col overflow-y-auto snap-y snap-mandatory scroll-smooth hide-scrollbar">
+                      {editorState.clips.map((clip, idx) => (
+                          <div key={clip.id} className="min-h-full w-full relative snap-start flex items-center justify-center bg-black group/scene">
+                              {clip.previewUrl && (clip.previewUrl.startsWith('data:image') || clip.previewUrl.endsWith('.png') || clip.previewUrl.endsWith('.jpg') || clip.previewUrl.endsWith('.jpeg') || clip.previewUrl.endsWith('.webp')) ? (
+                                <div className="w-full h-full flex flex-col items-center justify-center relative">
+                                  <img src={clip.previewUrl} alt={clip.title || `Slide ${idx + 1}`} className="w-full h-full object-contain" />
+                                  {(clip.audioUrl || clip.narration) && (
+                                    <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-700/60 flex items-center justify-between gap-3 z-20">
+                                      <span className="text-xs text-slate-300 truncate font-medium">Slide {idx + 1} Voiceover</span>
+                                      <button
+                                        onClick={() => playAudioPreview(clip.audioUrl, clip.narration, (gen) => {
+                                          setEditorState(prev => ({
+                                            ...prev,
+                                            clips: prev.clips.map((c, i) => i === idx ? { ...c, audioUrl: gen } : c)
+                                          }));
+                                        })}
+                                        className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                                      >
+                                        <SpeakerWaveIcon className="w-3.5 h-3.5" /> Play Voiceover
+                                      </button>
                                     </div>
-                                    {clip.narration && (
-                                       <div className="bg-black/80 backdrop-blur-2xl border border-white/10 rounded-[1.5rem] px-5 py-4 max-w-sm shadow-2xl">
-                                          <div className="flex items-center gap-2 mb-2">
-                                            <MicrophoneIcon className="w-4 h-4 text-indigo-400" />
-                                            <p className="text-[10px] text-indigo-400 font-black uppercase tracking-widest">AI Script Voice</p>
-                                          </div>
-                                          <p className="text-sm text-white/90 leading-relaxed italic font-medium">"{clip.narration}"</p>
-                                       </div>
-                                    )}
+                                  )}
                                 </div>
-                            </div>
-                        ))}
-                      </div>
-                    )}
-                </div>
+                              ) : (
+                                <video 
+                                  src={clip.previewUrl || clip.videoUrl} 
+                                  className="w-full h-full object-contain" 
+                                  controls 
+                                  autoPlay={idx === 0}
+                                  onEnded={(e) => {
+                                      // Seamless sequential playback simulation
+                                      const next = e.currentTarget.parentElement?.nextElementSibling;
+                                      if (next) {
+                                          next.scrollIntoView({ behavior: 'smooth' });
+                                          const nextVideo = next.querySelector('video');
+                                          if (nextVideo) nextVideo.play();
+                                      }
+                                  }}
+                                />
+                              )}
+                              
+                              {/* Overlay Controls */}
+                              <div className="absolute top-10 left-10 flex flex-col gap-3 pointer-events-none group-hover/scene:opacity-100 opacity-0 transition-opacity duration-300">
+                                  <div className="bg-indigo-600/90 backdrop-blur-xl shadow-[0_10px_30px_rgba(79,70,229,0.4)] rounded-2xl px-5 py-3 text-white inline-flex flex-col border border-white/20">
+                                      <p className="text-[9px] font-black uppercase tracking-widest opacity-80 mb-0.5">Scene {idx+1} of {editorState.clips.length}</p>
+                                      <p className="text-lg font-black">{Math.floor(clip.duration)}.0s</p>
+                                  </div>
+                                  {clip.narration && (
+                                     <div className="bg-black/80 backdrop-blur-2xl border border-white/10 rounded-[1.5rem] px-5 py-4 max-w-sm shadow-2xl">
+                                        <div className="flex items-center gap-2 mb-2">
+                                          <MicrophoneIcon className="w-4 h-4 text-indigo-400" />
+                                          <p className="text-[10px] text-indigo-400 font-black uppercase tracking-widest">AI Script Voice</p>
+                                        </div>
+                                        <p className="text-sm text-white/90 leading-relaxed italic font-medium">"{clip.narration}"</p>
+                                     </div>
+                                  )}
+                              </div>
+                          </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between px-4">
                   <div className="flex items-center gap-3">
                     <div className={`w-2.5 h-2.5 rounded-full ${editorState.isRendered ? 'bg-emerald-400' : 'bg-amber-400'} animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]`} />
