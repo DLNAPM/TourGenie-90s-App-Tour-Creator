@@ -10,6 +10,7 @@ export interface AppInput {
 export interface Scene {
   id: string;
   timestamp: string;
+  duration?: number;
   visualPrompt: string;
   narration: string;
   videoUrl?: string;

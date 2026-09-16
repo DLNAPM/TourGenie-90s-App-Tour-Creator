@@ -133,12 +133,13 @@ export async function renderScreenshotToVideo(
     }
   }
 
-  // Determine duration (match narration length + 0.5s padding, or default to 6s)
-  const duration = options.duration 
-    ? options.duration 
-    : audioDuration > 0 
-      ? Math.max(5, Math.ceil(audioDuration + 0.6)) 
-      : 6;
+  // Determine duration: match narration length + padding, or requested duration, capped at at most 30 seconds
+  const neededAudioDuration = audioDuration > 0 ? Math.ceil(audioDuration + 0.6) : 0;
+  const requestedDuration = options.duration 
+    ? Math.max(options.duration, neededAudioDuration) 
+    : (neededAudioDuration > 0 ? neededAudioDuration : 25);
+  // Cap each scene at at most 30-seconds to accommodate the length of Tour Script / Key Features
+  const duration = Math.min(30, Math.max(5, requestedDuration));
 
   const totalFrames = Math.max(30, Math.floor(duration * fps));
 

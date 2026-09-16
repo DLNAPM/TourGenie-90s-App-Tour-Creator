@@ -53,29 +53,41 @@ async function startServer() {
       const ai = new GoogleGenAI({ apiKey });
       const { name, url, description, script, screenshotCount = 0 } = req.body;
       const hasScreenshots = screenshotCount > 0;
+      // When screenshots are provided, create exactly as many scenes as there are uploaded screenshots.
+      const targetSceneCount = hasScreenshots ? screenshotCount : 5;
 
       const prompt = `
-        Act as a professional software video tour director. Create a 5-scene storyboard for a 90-second app tour video.
+        Act as a professional software video tour director.
+        Create an exact ${targetSceneCount}-scene storyboard for the app tour video.
+        ${hasScreenshots ? `CRITICAL REQUIREMENT: Exactly ${targetSceneCount} scenes MUST be created. There are ${targetSceneCount} uploaded screenshots. You MUST create exactly ONE scene for each uploaded screenshot in sequence (Scene 1 matches Screenshot 1, Scene 2 matches Screenshot 2, etc.). Return an array with exactly ${targetSceneCount} items.` : `Create a ${targetSceneCount}-scene storyboard.`}
+
         App Name: ${name || "My App"}
         App URL: ${url || ""}
         Description: ${description || ""}
         Tour Script / Key Features: ${script || ""}
         Screenshots Provided: ${hasScreenshots ? `${screenshotCount} real application screenshots provided in 100% U.S. English` : "None"}
 
+        CRITICAL TIMING & LENGTH REQUIREMENT:
+        - Timing of EACH scene must be up to 30-seconds (typically 15 to 30 seconds per scene, maximum 30 seconds) to thoroughly accommodate the length and depth of the Tour Script / Key Features provided by the user.
+        - For each scene, write an in-depth, engaging voiceover narration in fluent American English that thoroughly explains the key features and workflow shown in that screen. The narration should be substantial enough to speak naturally over up to 30 seconds (~40 to 75 spoken words per scene).
+        - In the "timestamp" field, provide sequential time ranges reflecting this timing (e.g. "0:00 - 0:25", "0:25 - 0:52", etc.), where each scene duration is between 15 and 30 seconds (maximum 30 seconds).
+        - In the "duration" field, provide the estimated duration in seconds (an integer between 15 and 30, maximum 30).
+
         CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:
         - Everything generated MUST be strictly in 100% fluent American English.
         - ${hasScreenshots 
-            ? `IMPORTANT: The user has provided real application screenshots in 100% U.S. English. In each "visualPrompt", describe ONLY 2D camera motions across the user's interface screencast (for example: "Smooth slow push-in zoom into the main dashboard metrics", "Gentle horizontal pan across the navigation items from left to right", "Smooth vertical glide down the detail view", "Slow steady zoom-out revealing the full interface layout"). DO NOT mention physical rooms, offices, gyms, smartphones, 3D devices, floating phones, or hand-held mockups. The video is a clean, direct 2D screen tour of the user's software.`
+            ? `IMPORTANT: The user has provided real application screenshots in 100% U.S. English. In each "visualPrompt", describe ONLY 2D camera motions across that specific interface screencast (for example: "Smooth slow push-in zoom into the main dashboard metrics", "Gentle horizontal pan across the navigation items from left to right", "Smooth vertical glide down the detail view", "Slow steady zoom-out revealing the full interface layout"). DO NOT mention physical rooms, offices, gyms, smartphones, 3D devices, floating phones, or hand-held mockups. The video is a clean, direct 2D screen tour of the user's software.`
             : `In each "visualPrompt", specify clean modern 2D software interface presentations with sleek motion graphics and crisp American English typography (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS').`
           }
-        - In each "narration", write natural, engaging voiceover script in 100% fluent American English.
+        - In each "narration", write natural, engaging voiceover script in 100% fluent American English that thoroughly covers the features shown.
 
         For each scene, provide:
-        1. A timestamp (e.g. 0:00 - 0:18)
-        2. A "visualPrompt" describing 2D screencast camera movement across the interface in crisp focus.
-        3. A "narration" text that will be converted to speech in 100% fluent U.S. English.
+        1. "timestamp": Sequential time range (e.g. "0:00 - 0:25", max 30s per scene)
+        2. "duration": Duration in seconds (integer between 15 and 30, max 30)
+        3. "visualPrompt": Describing 2D screencast camera movement across the interface in crisp focus.
+        4. "narration": Voiceover script in fluent U.S. English (~40-75 words, sized for up to 30 seconds of speech).
 
-        Return as a JSON array of objects with keys: timestamp, visualPrompt, narration.
+        Return as a JSON array of exactly ${targetSceneCount} objects.
       `;
 
       const response = await ai.models.generateContent({
@@ -89,23 +101,48 @@ async function startServer() {
               type: Type.OBJECT,
               properties: {
                 timestamp: { type: Type.STRING },
+                duration: { type: Type.INTEGER },
                 visualPrompt: { type: Type.STRING },
                 narration: { type: Type.STRING }
               },
               required: ["timestamp", "visualPrompt", "narration"],
-              propertyOrdering: ["timestamp", "visualPrompt", "narration"]
+              propertyOrdering: ["timestamp", "duration", "visualPrompt", "narration"]
             }
           }
         }
       });
 
       const parsed = JSON.parse(response.text || "[]");
-      const scenes = parsed.map((s: any, i: number) => ({
-        ...s,
-        id: `scene-${i}`,
-        status: 'pending',
-        screenshotIndex: hasScreenshots ? (i % screenshotCount) : undefined
-      }));
+      const baseScenes = Array.isArray(parsed) ? parsed : [];
+
+      // Ensure exact scene count matching targetSceneCount
+      const scenes: any[] = [];
+      let currentOffsetSec = 0;
+
+      for (let i = 0; i < targetSceneCount; i++) {
+        const item = baseScenes[i] || {};
+        let sceneDuration = typeof item.duration === 'number' && item.duration > 0
+          ? Math.min(30, Math.max(10, Math.round(item.duration)))
+          : 25; // default 25s (up to 30s)
+
+        const startSec = currentOffsetSec;
+        const endSec = startSec + sceneDuration;
+        currentOffsetSec = endSec;
+
+        const startMinStr = `${Math.floor(startSec / 60)}:${(startSec % 60).toString().padStart(2, '0')}`;
+        const endMinStr = `${Math.floor(endSec / 60)}:${(endSec % 60).toString().padStart(2, '0')}`;
+        const timestamp = item.timestamp || `${startMinStr} - ${endMinStr}`;
+
+        scenes.push({
+          id: `scene-${i}`,
+          timestamp,
+          duration: sceneDuration,
+          visualPrompt: item.visualPrompt || `Smooth 2D camera glide across interface screen ${i + 1}.`,
+          narration: item.narration || `Here in scene ${i + 1}, we explore key application features and productivity workflows designed to empower your team.`,
+          status: 'pending',
+          screenshotIndex: hasScreenshots ? i : undefined
+        });
+      }
 
       res.json({ scenes });
     } catch (err: any) {
