@@ -413,13 +413,14 @@ export default function App() {
     }
 
     if (restoredClips.length > 0) {
+      const isStaleBlob = typeof session.combinedVideoUrl === 'string' && session.combinedVideoUrl.startsWith('blob:');
       setEditorState({
         clips: restoredClips,
         isProcessing: false,
         includeVoiceover: true,
         isRendering: false,
-        isRendered: !!session.isRendered,
-        combinedVideoUrl: session.combinedVideoUrl || undefined,
+        isRendered: !!session.isRendered && !isStaleBlob,
+        combinedVideoUrl: isStaleBlob ? undefined : (session.combinedVideoUrl || undefined),
         youtubeMetadata: session.youtubeMetadata || undefined
       });
     }
@@ -661,8 +662,8 @@ export default function App() {
   };
 
   // --- Real Master Video Assembly & Stitching Engine ---
-  const handleRenderProject = async () => {
-    if (!isDurationValid || editorState.clips.length === 0) return;
+  const handleRenderProject = async (options?: { autoOpenPreview?: boolean }): Promise<string | null> => {
+    if (!isDurationValid || editorState.clips.length === 0) return null;
     setEditorState(prev => ({ ...prev, isRendering: true }));
     setRenderProgress(5);
     setRenderStage('Initializing Master Assembly Engine...');
@@ -758,6 +759,7 @@ export default function App() {
         );
       }
 
+      const finalMasterUrl = masterUrl || editorState.clips[0]?.previewUrl || null;
       setRenderProgress(100);
       setRenderStage(`Export Successful! All ${totalClips} scenes stitched.`);
 
@@ -766,21 +768,27 @@ export default function App() {
         ...prev,
         isRendering: false,
         isRendered: true,
-        combinedVideoUrl: masterUrl || prev.clips[0]?.previewUrl
+        combinedVideoUrl: finalMasterUrl || undefined
       }));
-      setPreviewMode('master');
-      setIsPreviewOpen(true);
+
+      if (options?.autoOpenPreview !== false) {
+        setPreviewMode('master');
+        setIsPreviewOpen(true);
+      }
+
+      return finalMasterUrl;
     } catch (err: any) {
       console.error('Master assembly error:', err);
       setEditorState(prev => ({ ...prev, isRendering: false }));
       setError(err.message || 'Failed to assemble master video');
+      return null;
     }
   };
 
   // --- Real YouTube Data API v3 Publish Flow ---
   const handleOpenYouTubePublish = () => {
-    if (!isDurationValid || !editorState.isRendered) {
-      if (!editorState.isRendered) setError("Assembly required: Please render and stitch your project before publishing.");
+    if (!isDurationValid) {
+      setError("Please ensure your project clips meet the 90-second duration target.");
       return;
     }
     setIsYouTubeModalOpen(true);
@@ -1733,12 +1741,12 @@ export default function App() {
                         )}
                         
                         <button 
-                          disabled={!isDurationValid || !editorState.isRendered}
+                          disabled={!isDurationValid}
                           onClick={handleOpenYouTubePublish}
-                          className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${isDurationValid && editorState.isRendered ? 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'}`}
+                          className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${isDurationValid ? 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'}`}
                         >
                           <PlayIcon className="w-6 h-6 fill-current" />
-                          {editorState.isRendered ? 'Push to YouTube' : 'Assembly Locked'}
+                          Push to YouTube
                         </button>
                       </div>
                     </div>
@@ -2011,6 +2019,7 @@ export default function App() {
         defaultTags={editorState.youtubeMetadata?.tags || ['apptour', 'saas', 'software', 'tutorial']}
         totalClipsCount={editorState.clips.length}
         totalDurationSeconds={totalDuration}
+        onRenderMasterProject={() => handleRenderProject({ autoOpenPreview: false })}
       />
 
       <footer className="fixed bottom-6 left-6 z-[60] flex gap-3">

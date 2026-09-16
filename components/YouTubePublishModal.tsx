@@ -21,7 +21,8 @@ import {
   GlobeAmericasIcon,
   LockClosedIcon,
   EyeIcon,
-  ArrowUpTrayIcon
+  ArrowUpTrayIcon,
+  FilmIcon
 } from "@heroicons/react/24/outline";
 
 interface YouTubePublishModalProps {
@@ -33,6 +34,7 @@ interface YouTubePublishModalProps {
   defaultTags?: string[];
   totalClipsCount: number;
   totalDurationSeconds: number;
+  onRenderMasterProject?: () => Promise<string | null>;
 }
 
 export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
@@ -43,12 +45,17 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   defaultDescription,
   defaultTags = [],
   totalClipsCount,
-  totalDurationSeconds
+  totalDurationSeconds,
+  onRenderMasterProject
 }) => {
   const [accessToken, setAccessToken] = useState<string | null>(getCachedYouTubeToken());
   const [channelInfo, setChannelInfo] = useState<YouTubeChannelInfo | null>(getCachedChannelInfo());
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Active Video Stream State
+  const [activeVideoUrl, setActiveVideoUrl] = useState<string>(combinedVideoUrl);
+  const [isAssembling, setIsAssembling] = useState(false);
 
   // Form Fields
   const [title, setTitle] = useState(defaultTitle || "TourGenie 90s App Tour");
@@ -72,6 +79,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
       if (defaultTitle) setTitle(defaultTitle);
       if (defaultDescription) setDescription(defaultDescription);
       if (defaultTags && defaultTags.length > 0) setTags(defaultTags);
+      if (combinedVideoUrl) setActiveVideoUrl(combinedVideoUrl);
       setUploadError(null);
       setUploadResult(null);
       setShowConfirm(false);
@@ -90,7 +98,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
         }
       }
     }
-  }, [isOpen, defaultTitle, defaultDescription, defaultTags]);
+  }, [isOpen, defaultTitle, defaultDescription, defaultTags, combinedVideoUrl]);
 
   if (!isOpen) return null;
 
@@ -137,14 +145,59 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
     setCachedChannelInfo(null);
   };
 
+  const handleAssembleMaster = async () => {
+    if (!onRenderMasterProject) return;
+    setIsAssembling(true);
+    setUploadError(null);
+    try {
+      const url = await onRenderMasterProject();
+      if (url) {
+        setActiveVideoUrl(url);
+      } else {
+        setUploadError("Master video assembly did not complete. Please check your scenes.");
+      }
+    } catch (err: any) {
+      console.error("Assembly error in YouTube modal:", err);
+      setUploadError(err.message || "Failed to assemble master video.");
+    } finally {
+      setIsAssembling(false);
+    }
+  };
+
+  const processAndAddTags = (inputStr: string) => {
+    // Split by commas or whitespace if hashtags
+    const rawTokens = inputStr.includes(',') 
+      ? inputStr.split(',') 
+      : inputStr.includes('#') 
+        ? inputStr.split(/\s+/) 
+        : [inputStr];
+
+    const newTokens: string[] = [];
+    for (const raw of rawTokens) {
+      const clean = raw.trim().replace(/^#+/, '').trim();
+      if (clean && !tags.includes(clean) && !newTokens.includes(clean)) {
+        newTokens.push(clean);
+      }
+    }
+
+    if (newTokens.length > 0) {
+      setTags(prev => [...prev, ...newTokens].slice(0, 30));
+      setTagInput("");
+    }
+  };
+
   const handleAddTag = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      const val = tagInput.trim().replace(/^#/, "");
-      if (val && !tags.includes(val) && tags.length < 30) {
-        setTags([...tags, val]);
-        setTagInput("");
-      }
+      processAndAddTags(tagInput);
+    }
+  };
+
+  const handleTagPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData("text");
+    if (pasted && (pasted.includes(",") || pasted.includes("#") || pasted.includes("\n"))) {
+      e.preventDefault();
+      processAndAddTags(pasted);
     }
   };
 
@@ -163,24 +216,66 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
       return;
     }
 
-    if (!combinedVideoUrl) {
-      setUploadError("No rendered master video found. Please render the project first.");
-      return;
-    }
-
     setShowConfirm(false);
     setIsUploading(true);
     setUploadProgress(5);
-    setUploadStage("Extracting master video binary stream...");
+    setUploadStage("Preparing master video stream for YouTube...");
     setUploadError(null);
 
-    try {
-      // 1. Fetch the master video Blob from the combinedVideoUrl
-      const videoRes = await fetch(combinedVideoUrl);
-      if (!videoRes.ok) {
-        throw new Error("Failed to load master video stream for broadcast.");
+    let targetVideoUrl = activeVideoUrl || combinedVideoUrl;
+
+    // If master video has not been assembled yet, assemble on-the-fly!
+    if (!targetVideoUrl) {
+      if (onRenderMasterProject) {
+        setUploadStage("Assembling & stitching all scenes into master 1080p MP4...");
+        setUploadProgress(15);
+        try {
+          const renderedUrl = await onRenderMasterProject();
+          if (!renderedUrl) {
+            throw new Error("Could not assemble master video. Please check your scene clips.");
+          }
+          targetVideoUrl = renderedUrl;
+          setActiveVideoUrl(renderedUrl);
+        } catch (assembleErr: any) {
+          setIsUploading(false);
+          setUploadError(assembleErr.message || "Failed to assemble master video project.");
+          return;
+        }
+      } else {
+        setIsUploading(false);
+        setUploadError("No rendered master video found. Please assemble and render the project first.");
+        return;
       }
-      const videoBlob = await videoRes.blob();
+    }
+
+    try {
+      // 1. Fetch the master video Blob from the targetVideoUrl
+      setUploadStage("Extracting master video binary stream...");
+      setUploadProgress(25);
+
+      let videoBlob: Blob;
+      try {
+        const videoRes = await fetch(targetVideoUrl);
+        if (!videoRes.ok) {
+          throw new Error(`Master video stream response status ${videoRes.status}`);
+        }
+        videoBlob = await videoRes.blob();
+      } catch (streamErr) {
+        // If fetch failed (for example, expired blob URL from earlier page session), auto re-assemble!
+        if (onRenderMasterProject) {
+          setUploadStage("Re-assembling expired video stream from project clips...");
+          setUploadProgress(30);
+          const freshUrl = await onRenderMasterProject();
+          if (!freshUrl) throw new Error("Could not refresh master video stream.");
+          targetVideoUrl = freshUrl;
+          setActiveVideoUrl(freshUrl);
+          const retryRes = await fetch(freshUrl);
+          if (!retryRes.ok) throw new Error("Failed to load refreshed master video stream.");
+          videoBlob = await retryRes.blob();
+        } else {
+          throw streamErr;
+        }
+      }
 
       // 2. Upload to YouTube API
       const result = await uploadVideoToYouTube({
@@ -410,6 +505,70 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                 )}
               </div>
 
+              {/* MASTER VIDEO ASSET STATUS & 1-CLICK ASSEMBLY */}
+              <div className={`p-4 rounded-2xl border transition-all ${
+                activeVideoUrl 
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60' 
+                  : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800/80'
+              }`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className={`p-2 rounded-xl mt-0.5 ${
+                      activeVideoUrl 
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
+                        : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                    }`}>
+                      <FilmIcon className="w-5 h-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-white">
+                          Master 1080p MP4 Stream
+                        </h4>
+                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                          activeVideoUrl 
+                            ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300' 
+                            : 'bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300'
+                        }`}>
+                          {activeVideoUrl ? 'Ready for YouTube' : 'Assembly Needed'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 dark:text-slate-400">
+                        {activeVideoUrl 
+                          ? `All ${totalClipsCount} scenes stitched into master broadcast video (${Math.floor(totalDurationSeconds)}s).`
+                          : `Project has ${totalClipsCount} scenes ready (${Math.floor(totalDurationSeconds)}s). Click assemble to compile into the broadcast master MP4.`
+                        }
+                      </p>
+                    </div>
+                  </div>
+
+                  {onRenderMasterProject && (
+                    <button
+                      type="button"
+                      disabled={isAssembling}
+                      onClick={handleAssembleMaster}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm shrink-0 active:scale-95 disabled:opacity-50 ${
+                        activeVideoUrl 
+                          ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300' 
+                          : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20'
+                      }`}
+                    >
+                      {isAssembling ? (
+                        <>
+                          <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
+                          <span>Assembling Scenes...</span>
+                        </>
+                      ) : (
+                        <>
+                          <SparklesIcon className="w-3.5 h-3.5" />
+                          <span>{activeVideoUrl ? 'Re-Assemble' : 'Assemble Master Now'}</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* STEP 2: METADATA & BROADCAST CONFIGURATION */}
               <div className="space-y-4">
                 {/* Title */}
@@ -479,9 +638,13 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                     value={tagInput}
                     onChange={(e) => setTagInput(e.target.value)}
                     onKeyDown={handleAddTag}
-                    placeholder="Add tags (e.g. apptour, react, tutorial)..."
+                    onPaste={handleTagPaste}
+                    placeholder="Type or paste tags (e.g. app tour, saas, tutorial) and press Enter or comma..."
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500"
                   />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Accepts comma-separated phrases, individual words, or hashtags (up to 30 tags). No # required.
+                  </p>
                 </div>
 
                 {/* Privacy Status */}
