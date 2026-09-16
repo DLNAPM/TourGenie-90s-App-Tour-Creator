@@ -1,31 +1,58 @@
 {
   "entities": {
     "UserProfile": {
-      "collection": "users",
-      "fields": {
-        "userId": "string",
-        "email": "string?",
-        "displayName": "string?",
-        "photoURL": "string?",
-        "isAnonymous": "boolean",
-        "createdAt": "timestamp",
-        "lastLoginAt": "timestamp"
-      }
+      "title": "UserProfile",
+      "description": "Registered user profile details",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique user ID matching auth.uid" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "photoURL": { "type": "string", "description": "Avatar photo URL" },
+        "isAnonymous": { "type": "boolean", "description": "Whether user is guest" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation time" },
+        "lastLoginAt": { "type": "string", "format": "date-time", "description": "Last sign in timestamp" }
+      },
+      "required": ["userId"]
     },
-    "UserSession": {
-      "collection": "users/{userId}/sessions",
-      "fields": {
-        "sessionId": "string",
-        "userId": "string",
-        "title": "string",
-        "appDescription": "string?",
-        "clips": "array",
-        "totalDuration": "number",
-        "combinedVideoUrl": "string?",
-        "isRendered": "boolean",
-        "createdAt": "timestamp",
-        "updatedAt": "timestamp"
-      }
+    "TourSession": {
+      "title": "TourSession",
+      "description": "Saved tour project session that can be shared with other users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique session ID" },
+        "userId": { "type": "string", "description": "Creator/Owner user ID" },
+        "ownerEmail": { "type": "string", "description": "Creator email" },
+        "ownerName": { "type": "string", "description": "Creator display name" },
+        "title": { "type": "string", "description": "Tour title", "maxLength": 200 },
+        "appDescription": { "type": "string", "description": "Application description" },
+        "clipsCount": { "type": "number", "description": "Number of storyboard/video scenes" },
+        "totalDuration": { "type": "number", "description": "Total duration in seconds" },
+        "isRendered": { "type": "boolean", "description": "Whether full video is rendered" },
+        "combinedVideoUrl": { "type": "string", "description": "URL to stitched master video" },
+        "clips": { "type": "array", "description": "List of scenes/clips" },
+        "youtubeMetadata": { "type": "object", "description": "Exported metadata" },
+        "sharedWithEmails": { "type": "array", "description": "List of emails granted access" },
+        "sharedWithUids": { "type": "array", "description": "List of user IDs granted access" },
+        "isPublic": { "type": "boolean", "description": "Whether tour is shared publicly with all app users" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last modified timestamp" }
+      },
+      "required": ["id", "userId", "title"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User private profile and authentication record"
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": "TourSession",
+      "description": "Private user sessions subcollection"
+    },
+    "/sessions/{sessionId}": {
+      "schema": "TourSession",
+      "description": "Top-level tour sessions collection supporting sharing across users"
     }
   }
 }

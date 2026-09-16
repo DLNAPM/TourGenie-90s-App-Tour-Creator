@@ -3,7 +3,7 @@ import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './typ
 import { TourService } from './services/geminiService';
 import { pcmBase64ToWavBlob, stitchClipsClientSide } from './services/screenStudioEngine';
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { auth, logoutUser, saveUserSession, SavedProjectSession } from './services/firebase';
+import { auth, logoutUser, saveUserSession, getSessionById, SavedProjectSession } from './services/firebase';
 import { AuthModal } from './components/AuthModal';
 import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { 
@@ -35,7 +35,8 @@ import {
   ArrowPathIcon,
   UserIcon,
   ArrowRightOnRectangleIcon,
-  DocumentArrowUpIcon
+  DocumentArrowUpIcon,
+  UserGroupIcon
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
@@ -244,6 +245,22 @@ export default function App() {
     setQuickSaveFeedback(`Loaded: ${session.title}`);
     setTimeout(() => setQuickSaveFeedback(null), 3500);
   };
+
+  // Auto-load shared session from URL if ?session=SESSION_ID is provided
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedSessionId = params.get('session');
+    if (sharedSessionId) {
+      getSessionById(sharedSessionId).then(session => {
+        if (session) {
+          handleLoadSession(session);
+          setQuickSaveFeedback(`Loaded Shared Tour: ${session.title}`);
+        }
+      }).catch(err => {
+        console.warn("Could not load shared session from URL:", err);
+      });
+    }
+  }, []);
 
   // --- Utility: Get Video Duration ---
   const getVideoDuration = (file: File): Promise<number> => {
@@ -762,14 +779,14 @@ export default function App() {
                 <span className="hidden md:inline">{quickSaveFeedback || 'Save Session'}</span>
               </button>
 
-              {/* My Saved Tours Button */}
+              {/* Saved & Shared Tours Button */}
               <button
                 onClick={() => setIsSessionsModalOpen(true)}
-                title="Browse and load saved projects"
+                title="Browse, share, and collaborate on saved tour projects"
                 className="flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition active:scale-95 shadow-sm"
               >
-                <FilmIcon className="w-3.5 h-3.5 text-slate-500" />
-                <span className="hidden md:inline">My Saved Tours</span>
+                <UserGroupIcon className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="hidden md:inline">Saved & Shared Tours</span>
               </button>
 
               {/* User Avatar & Logout */}
@@ -810,6 +827,14 @@ export default function App() {
             </div>
           ) : (
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                title="Sign in to view and collaborate on shared tours"
+                className="flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition active:scale-95 shadow-sm"
+              >
+                <UserGroupIcon className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="hidden sm:inline">Shared Tours</span>
+              </button>
               <button
                 onClick={() => setIsAuthModalOpen(true)}
                 className="flex items-center gap-2 text-xs font-bold py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition active:scale-95"
@@ -999,6 +1024,19 @@ export default function App() {
                       <FilmIcon className="w-4 h-4" /> Open in Video Editor ({state.scenes.length} Scenes)
                     </button>
                     <button
+                      onClick={() => {
+                        sendScenesToEditor();
+                        if (!currentUser) {
+                          setIsAuthModalOpen(true);
+                        } else {
+                          setIsSessionsModalOpen(true);
+                        }
+                      }}
+                      className="bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-700 font-bold py-3 px-4 rounded-xl text-sm transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                    >
+                      <ShareIcon className="w-4 h-4 text-indigo-600" /> Share Tour
+                    </button>
+                    <button
                       onClick={() => setState(prev => ({ ...prev, step: 'input' }))}
                       className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-3 px-4 rounded-xl text-sm transition"
                     >
@@ -1136,7 +1174,23 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                {editorState.clips.length > 0 && (
+                  <button 
+                    onClick={() => {
+                      if (!currentUser) {
+                        setIsAuthModalOpen(true);
+                      } else {
+                        setIsSessionsModalOpen(true);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition font-bold text-sm shadow-sm active:scale-95"
+                    title="Share this tour session with other users"
+                  >
+                    <ShareIcon className="w-4 h-4 text-indigo-600" />
+                    <span>Share Tour</span>
+                  </button>
+                )}
                 <button 
                   onClick={() => setEditorState(prev => ({ ...prev, includeVoiceover: !prev.includeVoiceover }))}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition font-semibold text-sm ${editorState.includeVoiceover ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-400'}`}
