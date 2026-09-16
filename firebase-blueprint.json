@@ -25,6 +25,8 @@
         "ownerEmail": { "type": "string", "description": "Creator email" },
         "ownerName": { "type": "string", "description": "Creator display name" },
         "title": { "type": "string", "description": "Tour title", "maxLength": 200 },
+        "sessionName": { "type": "string", "description": "Custom session name chosen by the user", "maxLength": 200 },
+        "projectName": { "type": "string", "description": "Project group name used to organize and categorize related sessions", "maxLength": 100 },
         "appDescription": { "type": "string", "description": "Application description" },
         "clipsCount": { "type": "number", "description": "Number of storyboard/video scenes" },
         "totalDuration": { "type": "number", "description": "Total duration in seconds" },

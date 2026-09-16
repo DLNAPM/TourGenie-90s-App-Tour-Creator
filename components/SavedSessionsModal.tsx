@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
   SavedProjectSession, 
   getUserSessions, 
@@ -8,6 +8,7 @@ import {
   deleteUserSession, 
   saveUserSession,
   duplicateSharedSessionToMyAccount,
+  updateSessionOrganization,
   auth
 } from "../services/firebase";
 import { ShareSessionModal } from "./ShareSessionModal";
@@ -22,11 +23,18 @@ import {
   ShareIcon,
   UserGroupIcon,
   GlobeAmericasIcon,
-  ArrowDownTrayIcon,
   DocumentDuplicateIcon,
-  SparklesIcon,
   KeyIcon,
-  ArrowRightIcon
+  ArrowRightIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  MagnifyingGlassIcon,
+  PencilSquareIcon,
+  Squares2X2Icon,
+  ListBulletIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CheckIcon
 } from "@heroicons/react/24/outline";
 
 interface SavedSessionsModalProps {
@@ -36,6 +44,8 @@ interface SavedSessionsModalProps {
   onLoadSession: (session: SavedProjectSession) => void;
   currentProject: {
     title: string;
+    sessionName?: string;
+    projectName?: string;
     description: string;
     appUrl?: string;
     script?: string;
@@ -63,9 +73,30 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
   const [sharedSessions, setSharedSessions] = useState<SavedProjectSession[]>([]);
   const [communitySessions, setCommunitySessions] = useState<SavedProjectSession[]>([]);
   const [loading, setLoading] = useState(false);
-  const [saveTitle, setSaveTitle] = useState(currentProject.title || "TourGenie 90s App Tour");
+
+  // Saving State with Session Name and Project Name
+  const [saveSessionName, setSaveSessionName] = useState(
+    currentProject.sessionName || currentProject.title || "TourGenie App Tour"
+  );
+  const [saveProjectName, setSaveProjectName] = useState(
+    currentProject.projectName || "General"
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Organization, Filtering & Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedProjectFilter, setSelectedProjectFilter] = useState<string>("ALL");
+  const [viewMode, setViewMode] = useState<"grouped" | "list">("grouped");
+  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
+
+  // Inline Organization Editing State
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [inlineSessionName, setInlineSessionName] = useState("");
+  const [inlineProjectName, setInlineProjectName] = useState("");
+  const [isUpdatingOrg, setIsUpdatingOrg] = useState(false);
+
+  // General Actions State
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [importCode, setImportCode] = useState("");
   const [isImporting, setIsImporting] = useState(false);
@@ -103,12 +134,53 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
   useEffect(() => {
     if (isOpen && userId) {
       fetchAllData();
-      setSaveTitle(currentProject.title || "TourGenie 90s App Tour");
+      setSaveSessionName(currentProject.sessionName || currentProject.title || "TourGenie App Tour");
+      setSaveProjectName(currentProject.projectName || "General");
       setSaveSuccess(false);
       setImportError(null);
       setStatusNotice(null);
+      setEditingSessionId(null);
     }
-  }, [isOpen, userId, currentProject.title, currentUserEmail]);
+  }, [isOpen, userId, currentProject.title, currentProject.sessionName, currentProject.projectName, currentUserEmail]);
+
+  // Extract distinct projects for project filter and suggestions
+  const availableProjects = useMemo(() => {
+    const set = new Set<string>();
+    const currentList = activeTab === "mine" ? mySessions : activeTab === "shared" ? sharedSessions : communitySessions;
+    currentList.forEach(s => {
+      const p = s.projectName?.trim();
+      if (p) set.add(p);
+      else set.add("General");
+    });
+    return Array.from(set).sort();
+  }, [activeTab, mySessions, sharedSessions, communitySessions]);
+
+  // Filter sessions by tab, search query, and project filter
+  const displayedSessions = useMemo(() => {
+    const rawList = activeTab === "mine" ? mySessions : activeTab === "shared" ? sharedSessions : communitySessions;
+    return rawList.filter(s => {
+      const sName = (s.sessionName || s.title || "").toLowerCase();
+      const pName = (s.projectName || "General").toLowerCase();
+      const owner = (s.ownerName || s.ownerEmail || "").toLowerCase();
+      const q = searchQuery.trim().toLowerCase();
+
+      const matchesSearch = !q || sName.includes(q) || pName.includes(q) || owner.includes(q);
+      const matchesProject = selectedProjectFilter === "ALL" || (s.projectName || "General").toLowerCase() === selectedProjectFilter.toLowerCase();
+
+      return matchesSearch && matchesProject;
+    });
+  }, [activeTab, mySessions, sharedSessions, communitySessions, searchQuery, selectedProjectFilter]);
+
+  // Group sessions by project name for structured folder view
+  const groupedSessions = useMemo(() => {
+    const groups: Record<string, SavedProjectSession[]> = {};
+    displayedSessions.forEach(s => {
+      const proj = s.projectName?.trim() || "General";
+      if (!groups[proj]) groups[proj] = [];
+      groups[proj].push(s);
+    });
+    return groups;
+  }, [displayedSessions]);
 
   if (!isOpen) return null;
 
@@ -124,9 +196,14 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
         currentProject.screenshots?.length || 0
       );
 
+      const finalSessionName = saveSessionName.trim() || "TourGenie App Tour";
+      const finalProjectName = saveProjectName.trim() || "General";
+
       const newSessionId = await saveUserSession(userId, {
         id: `session_${Date.now()}`,
-        title: saveTitle.trim() || "TourGenie App Tour",
+        title: finalSessionName,
+        sessionName: finalSessionName,
+        projectName: finalProjectName,
         appDescription: currentProject.description || "",
         appUrl: currentProject.appUrl || "",
         script: currentProject.script || "",
@@ -141,14 +218,54 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
         sharedWithEmails: [],
         isPublic: false
       });
+
       setSaveSuccess(true);
+      setStatusNotice(`Session "${finalSessionName}" saved under project [${finalProjectName}]!`);
       if (onSessionSaved) onSessionSaved(newSessionId);
       await fetchAllData();
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setStatusNotice(null);
+      }, 3500);
     } catch (err) {
       console.error("Failed to save project:", err);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const startInlineEdit = (session: SavedProjectSession) => {
+    setEditingSessionId(session.id);
+    setInlineSessionName(session.sessionName || session.title || "TourGenie Tour");
+    setInlineProjectName(session.projectName || "General");
+  };
+
+  const handleSaveInlineEdit = async (sessionId: string) => {
+    if (!userId) return;
+    setIsUpdatingOrg(true);
+    try {
+      const updatedName = inlineSessionName.trim() || "TourGenie Tour";
+      const updatedProject = inlineProjectName.trim() || "General";
+
+      await updateSessionOrganization(userId, sessionId, {
+        sessionName: updatedName,
+        projectName: updatedProject
+      });
+
+      setMySessions(prev => prev.map(s => s.id === sessionId ? {
+        ...s,
+        sessionName: updatedName,
+        title: updatedName,
+        projectName: updatedProject
+      } : s));
+
+      setStatusNotice(`Updated session to "${updatedName}" in [${updatedProject}]`);
+      setEditingSessionId(null);
+      setTimeout(() => setStatusNotice(null), 3000);
+    } catch (err) {
+      console.error("Failed to update session organization:", err);
+    } finally {
+      setIsUpdatingOrg(false);
     }
   };
 
@@ -194,7 +311,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
     setCloningId(session.id);
     try {
       const newId = await duplicateSharedSessionToMyAccount(session, userId);
-      setStatusNotice(`Saved a personal copy of "${session.title}" to your account!`);
+      setStatusNotice(`Saved a personal copy of "${session.sessionName || session.title}" to project [${session.projectName || "General"}]!`);
       await fetchAllData();
       setActiveTab("mine");
       setTimeout(() => setStatusNotice(null), 3500);
@@ -210,14 +327,231 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
     setSelectedSessionForSharing(updatedSession);
   };
 
-  const displayedSessions = 
-    activeTab === "mine" ? mySessions :
-    activeTab === "shared" ? sharedSessions : communitySessions;
+  const toggleCollapseProject = (proj: string) => {
+    setCollapsedProjects(prev => ({
+      ...prev,
+      [proj]: !prev[proj]
+    }));
+  };
+
+  // Render a single session card
+  const renderSessionCard = (s: SavedProjectSession, safeId: string) => {
+    const isOwner = s.userId === userId;
+    const sharedCount = s.sharedWithEmails?.length || 0;
+    const isEditing = editingSessionId === safeId;
+
+    return (
+      <div 
+        key={safeId}
+        className="p-4 bg-white dark:bg-slate-800/80 hover:bg-slate-50/80 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 rounded-2xl transition flex flex-col gap-3 shadow-sm"
+      >
+        {isEditing ? (
+          // Inline Edit Mode for Renaming & Reassigning Project
+          <div className="bg-slate-50 dark:bg-slate-900/90 p-3.5 rounded-xl border border-indigo-200 dark:border-indigo-800/60 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+                <PencilSquareIcon className="w-3.5 h-3.5" /> Edit Session & Project Name
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">ID: {safeId.substring(0, 14)}...</span>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Session Name</label>
+                <input
+                  type="text"
+                  value={inlineSessionName}
+                  onChange={(e) => setInlineSessionName(e.target.value)}
+                  placeholder="Session Name"
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Project Group</label>
+                <input
+                  type="text"
+                  value={inlineProjectName}
+                  onChange={(e) => setInlineProjectName(e.target.value)}
+                  placeholder="Project Name (e.g. Acme Mobile)"
+                  className="w-full px-3 py-1.5 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500 dark:text-white"
+                />
+              </div>
+            </div>
+
+            {/* Quick project suggestion pills in edit mode */}
+            {availableProjects.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <span className="text-[10px] text-slate-400 font-medium">Quick Assign:</span>
+                {availableProjects.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setInlineProjectName(p)}
+                    className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-900 text-slate-700 dark:text-slate-300 transition"
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setEditingSessionId(null)}
+                disabled={isUpdatingOrg}
+                className="px-3 py-1 text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 rounded-lg transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveInlineEdit(safeId)}
+                disabled={isUpdatingOrg}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg shadow-sm transition flex items-center gap-1.5"
+              >
+                {isUpdatingOrg ? <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" /> : <CheckIcon className="w-3.5 h-3.5" />}
+                Save Changes
+              </button>
+            </div>
+          </div>
+        ) : (
+          // Normal Display Mode
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                {/* Session Name */}
+                <h3 className="text-sm font-black text-slate-900 dark:text-white truncate">
+                  {s.sessionName || s.title || "Untitled Tour"}
+                </h3>
+
+                {/* Project Badge - Click to filter by this project */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedProjectFilter(s.projectName || "General")}
+                  title={`Click to filter sessions in project "${s.projectName || "General"}"`}
+                  className="bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800 text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1 transition"
+                >
+                  <FolderIcon className="w-3 h-3 text-indigo-500" />
+                  {s.projectName || "General"}
+                </button>
+
+                {s.isRendered && (
+                  <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-full">
+                    Rendered
+                  </span>
+                )}
+
+                {/* Sharing badges */}
+                {isOwner && (
+                  <>
+                    {s.isPublic && (
+                      <span className="bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <GlobeAmericasIcon className="w-3 h-3" /> Public
+                      </span>
+                    )}
+                    {sharedCount > 0 && (
+                      <span className="bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-400 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <UserGroupIcon className="w-3 h-3" /> Shared ({sharedCount})
+                      </span>
+                    )}
+                  </>
+                )}
+                {!isOwner && (
+                  <span className="bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                    By {s.ownerName || s.ownerEmail || "Collaborator"}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 text-xs text-slate-400 dark:text-slate-500 flex-wrap">
+                <span className="flex items-center gap-1 font-medium">
+                  <FilmIcon className="w-3.5 h-3.5 text-indigo-500" />
+                  {s.clips?.length || s.scenes?.length || s.clipsCount || 0} Slides
+                </span>
+                <span>•</span>
+                <span className="flex items-center gap-1 font-medium">
+                  <ClockIcon className="w-3.5 h-3.5 text-slate-400" />
+                  {Math.floor(s.totalDuration || 0)}s
+                </span>
+                <span>•</span>
+                <span className="font-mono text-[10px] text-slate-400">
+                  ID: {safeId.length > 16 ? `${safeId.substring(0, 16)}...` : safeId}
+                </span>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              {/* Inline rename / reorganize button (for owner) */}
+              {isOwner && (
+                <button
+                  onClick={() => startInlineEdit(s)}
+                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-700 rounded-xl transition"
+                  title="Rename session or change project"
+                >
+                  <PencilSquareIcon className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* Share button for owner */}
+              {isOwner && (
+                <button
+                  onClick={() => setSelectedSessionForSharing({ ...s, id: safeId })}
+                  className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5"
+                  title="Share with other users"
+                >
+                  <ShareIcon className="w-3.5 h-3.5 text-indigo-600" />
+                  Share
+                </button>
+              )}
+
+              {/* Duplicate / Save Copy button for non-owner */}
+              {!isOwner && (
+                <button
+                  onClick={() => handleCloneToMyAccount({ ...s, id: safeId })}
+                  disabled={cloningId === safeId}
+                  className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50"
+                  title="Save a copy of this tour to your account"
+                >
+                  <DocumentDuplicateIcon className="w-3.5 h-3.5 text-indigo-600" />
+                  {cloningId === safeId ? "Copying..." : "Save a Copy"}
+                </button>
+              )}
+
+              {/* Load into Editor */}
+              <button
+                onClick={() => {
+                  onLoadSession({ ...s, id: safeId });
+                  onClose();
+                }}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition active:scale-95 shadow"
+              >
+                Load Project
+              </button>
+
+              {/* Delete button (owner only) */}
+              {isOwner && (
+                <button
+                  onClick={() => handleDelete(safeId)}
+                  disabled={deletingId === safeId}
+                  title="Delete session"
+                  className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
       <div className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-3xl w-full p-6 sm:p-8 shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-4xl w-full p-6 sm:p-8 shadow-2xl relative overflow-hidden flex flex-col max-h-[92vh]">
           
           {/* Header */}
           <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800">
@@ -227,7 +561,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                 TourGenie Cloud Sessions
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Manage, collaborate, and share your tour video projects with other users.
+                Save, categorize, and organize your tour sessions into related projects.
               </p>
             </div>
             <button 
@@ -238,42 +572,96 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
             </button>
           </div>
 
-          {/* Quick Save Current Session Section */}
+          {/* Save Current Session to Project Section */}
           <form onSubmit={handleSaveCurrent} className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700/60">
             <div className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span>Save Current Project</span>
+              <span className="flex items-center gap-1.5">
+                <FolderPlusIcon className="w-4 h-4 text-indigo-600" />
+                Save Current Session to Project
+              </span>
               <span className="text-[11px] font-medium text-slate-400">
                 {currentProject.clips?.length || currentProject.scenes?.length || currentProject.screenshots?.length || 0} Slides • {Math.floor(currentProject.totalDuration)}s Total
               </span>
             </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={saveTitle}
-                onChange={(e) => setSaveTitle(e.target.value)}
-                placeholder="e.g. Acme Mobile Tour v1"
-                className="flex-1 px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-white"
-              />
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-xl shadow transition active:scale-95 disabled:opacity-60 flex items-center gap-1.5 whitespace-nowrap"
-              >
-                {isSaving ? (
-                  <>
-                    <ArrowPathIcon className="w-4 h-4 animate-spin" /> Saving...
-                  </>
-                ) : saveSuccess ? (
-                  <>
-                    <CheckCircleIcon className="w-4 h-4 text-emerald-300" /> Saved!
-                  </>
-                ) : (
-                  <>
-                    <DocumentArrowUpIcon className="w-4 h-4" /> Save Session
-                  </>
-                )}
-              </button>
+
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              {/* Session Name Input */}
+              <div className="sm:col-span-6">
+                <input
+                  type="text"
+                  required
+                  value={saveSessionName}
+                  onChange={(e) => setSaveSessionName(e.target.value)}
+                  placeholder="Session Name (e.g. Onboarding Demo v1)"
+                  className="w-full px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-white"
+                />
+              </div>
+
+              {/* Project Group Input */}
+              <div className="sm:col-span-4 relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <FolderIcon className="w-3.5 h-3.5" />
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={saveProjectName}
+                  onChange={(e) => setSaveProjectName(e.target.value)}
+                  placeholder="Project (e.g. Acme Mobile)"
+                  className="w-full pl-8 pr-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-white"
+                />
+              </div>
+
+              {/* Submit Button */}
+              <div className="sm:col-span-2">
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3 py-2.5 rounded-xl shadow transition active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  {isSaving ? (
+                    <>
+                      <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" /> Saving...
+                    </>
+                  ) : saveSuccess ? (
+                    <>
+                      <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-300" /> Saved!
+                    </>
+                  ) : (
+                    <>
+                      <DocumentArrowUpIcon className="w-3.5 h-3.5" /> Save Session
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
+
+            {/* Quick existing project selector pills */}
+            {availableProjects.length > 0 && (
+              <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  Existing Projects:
+                </span>
+                {availableProjects.map((p) => {
+                  const isSelected = saveProjectName.trim().toLowerCase() === p.toLowerCase();
+                  return (
+                    <button
+                      type="button"
+                      key={p}
+                      onClick={() => setSaveProjectName(p)}
+                      className={`text-xs px-2.5 py-0.5 rounded-lg font-bold transition flex items-center gap-1 ${
+                        isSelected
+                          ? "bg-indigo-600 text-white shadow-sm"
+                          : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-400"
+                      }`}
+                    >
+                      <FolderIcon className={`w-3 h-3 ${isSelected ? "text-white" : "text-indigo-500"}`} />
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </form>
 
           {/* Import by Session ID Bar */}
@@ -307,47 +695,141 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
             </p>
           )}
 
-          {/* Tabs: My Tours, Shared with Me, Community */}
-          <div className="mt-5 flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
-            <button
-              onClick={() => setActiveTab("mine")}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                activeTab === "mine"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              }`}
-            >
-              <FilmIcon className="w-4 h-4" />
-              My Saved Tours ({mySessions.length})
-            </button>
+          {/* Navigation Tabs: My Tours, Shared with Me, Community */}
+          <div className="mt-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2 flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setActiveTab("mine");
+                  setSelectedProjectFilter("ALL");
+                }}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                  activeTab === "mine"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                <FilmIcon className="w-4 h-4" />
+                My Saved Tours ({mySessions.length})
+              </button>
 
-            <button
-              onClick={() => setActiveTab("shared")}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                activeTab === "shared"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              }`}
-            >
-              <UserGroupIcon className="w-4 h-4" />
-              Shared with Me ({sharedSessions.length})
-            </button>
+              <button
+                onClick={() => {
+                  setActiveTab("shared");
+                  setSelectedProjectFilter("ALL");
+                }}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                  activeTab === "shared"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                <UserGroupIcon className="w-4 h-4" />
+                Shared with Me ({sharedSessions.length})
+              </button>
 
-            <button
-              onClick={() => setActiveTab("community")}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
-                activeTab === "community"
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              }`}
-            >
-              <GlobeAmericasIcon className="w-4 h-4" />
-              Community & Team ({communitySessions.length})
-            </button>
+              <button
+                onClick={() => {
+                  setActiveTab("community");
+                  setSelectedProjectFilter("ALL");
+                }}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                  activeTab === "community"
+                    ? "bg-indigo-600 text-white shadow-sm"
+                    : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                <GlobeAmericasIcon className="w-4 h-4" />
+                Community ({communitySessions.length})
+              </button>
+            </div>
+
+            {/* View Mode Toggle: Grouped by Project vs List View */}
+            <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setViewMode("grouped")}
+                title="Group sessions by project folder"
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  viewMode === "grouped"
+                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                }`}
+              >
+                <Squares2X2Icon className="w-3.5 h-3.5" />
+                By Project
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                title="View all sessions in a flat list"
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                  viewMode === "list"
+                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                }`}
+              >
+                <ListBulletIcon className="w-3.5 h-3.5" />
+                All List
+              </button>
+            </div>
           </div>
 
-          {/* Sessions List */}
-          <div className="mt-4 flex-1 overflow-y-auto space-y-3 pr-1">
+          {/* Search & Project Filter Bar */}
+          <div className="mt-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            {/* Search Input */}
+            <div className="relative flex-1">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <MagnifyingGlassIcon className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                placeholder="Search by session title or project name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-4 py-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 dark:text-white placeholder:text-slate-400"
+              />
+            </div>
+
+            {/* Project Filter Chips */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+              <button
+                onClick={() => setSelectedProjectFilter("ALL")}
+                className={`text-xs px-2.5 py-1 rounded-lg font-bold transition whitespace-nowrap ${
+                  selectedProjectFilter === "ALL"
+                    ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                    : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+                }`}
+              >
+                All Projects
+              </button>
+              {availableProjects.map((p) => {
+                const count = (activeTab === "mine" ? mySessions : activeTab === "shared" ? sharedSessions : communitySessions)
+                  .filter(s => (s.projectName || "General").toLowerCase() === p.toLowerCase()).length;
+                const isSelected = selectedProjectFilter.toLowerCase() === p.toLowerCase();
+                return (
+                  <button
+                    key={p}
+                    onClick={() => setSelectedProjectFilter(p)}
+                    className={`text-xs px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1 whitespace-nowrap ${
+                      isSelected
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200"
+                    }`}
+                  >
+                    <FolderIcon className={`w-3 h-3 ${isSelected ? "text-white" : "text-indigo-500"}`} />
+                    <span>{p}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isSelected ? "bg-indigo-700 text-indigo-100" : "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Sessions Content List */}
+          <div className="mt-3 flex-1 overflow-y-auto space-y-3 pr-1">
             {loading ? (
               <div className="py-12 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
                 <ArrowPathIcon className="w-6 h-6 animate-spin text-indigo-500" />
@@ -355,132 +837,85 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
               </div>
             ) : displayedSessions.length === 0 ? (
               <div className="py-12 text-center text-slate-400 dark:text-slate-500">
-                <FilmIcon className="w-10 h-10 mx-auto opacity-30 mb-2" />
+                <FolderIcon className="w-10 h-10 mx-auto opacity-30 mb-2" />
                 <p className="text-sm font-semibold">
-                  {activeTab === "mine" 
+                  {searchQuery || selectedProjectFilter !== "ALL"
+                    ? "No sessions match your search or project filter."
+                    : activeTab === "mine" 
                     ? "No saved tour sessions yet." 
                     : activeTab === "shared" 
                     ? "No sessions shared with your email yet." 
                     : "No public community tours yet."}
                 </p>
                 <p className="text-xs mt-1">
-                  {activeTab === "mine" 
-                    ? "Save your current tour above to keep it in the cloud and share with others." 
-                    : activeTab === "shared" 
-                    ? "When other users grant access to your email, their tours will appear here." 
-                    : "Make your tours public to share them with other users across the app."}
+                  {searchQuery || selectedProjectFilter !== "ALL"
+                    ? "Try clearing the search or switching project filters."
+                    : "Save your current tour session above with a name and project to get organized!"}
                 </p>
+                {(searchQuery || selectedProjectFilter !== "ALL") && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSelectedProjectFilter("ALL");
+                    }}
+                    className="mt-3 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition"
+                  >
+                    Clear Filters
+                  </button>
+                )}
               </div>
-            ) : (
-              displayedSessions.map((s, idx) => {
-                const safeId = String(s?.id || `session_${idx}`);
-                const isOwner = s.userId === userId;
-                const sharedCount = s.sharedWithEmails?.length || 0;
+            ) : viewMode === "grouped" ? (
+              // Grouped by Project Folders View
+              Object.keys(groupedSessions).map((projectName) => {
+                const sessionsInProject = groupedSessions[projectName];
+                const isCollapsed = collapsedProjects[projectName];
                 return (
                   <div 
-                    key={safeId}
-                    className="p-4 bg-white dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 rounded-2xl transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
+                    key={projectName} 
+                    className="bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 space-y-2.5"
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-sm font-black text-slate-900 dark:text-white truncate">
-                          {s.title || "Untitled Tour"}
-                        </h3>
-                        {s.isRendered && (
-                          <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-full">
-                            Rendered
+                    {/* Project Folder Header */}
+                    <div 
+                      onClick={() => toggleCollapseProject(projectName)}
+                      className="flex items-center justify-between cursor-pointer select-none group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                          <FolderIcon className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="text-sm font-black text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+                            {projectName}
                           </span>
-                        )}
-                        {/* Sharing badges */}
-                        {isOwner && (
-                          <>
-                            {s.isPublic && (
-                              <span className="bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                                <GlobeAmericasIcon className="w-3 h-3" /> Public in App
-                              </span>
-                            )}
-                            {sharedCount > 0 && (
-                              <span className="bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-400 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                                <UserGroupIcon className="w-3 h-3" /> Shared ({sharedCount})
-                              </span>
-                            )}
-                          </>
-                        )}
-                        {!isOwner && (
-                          <span className="bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                            By {s.ownerName || s.ownerEmail || "Collaborator"}
+                          <span className="ml-2 text-xs font-medium text-slate-400">
+                            ({sessionsInProject.length} {sessionsInProject.length === 1 ? "session" : "sessions"})
                           </span>
-                        )}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-3 text-xs text-slate-400 dark:text-slate-500 mt-1 flex-wrap">
-                        <span className="flex items-center gap-1 font-medium">
-                          <FilmIcon className="w-3.5 h-3.5 text-indigo-500" />
-                          {s.clips?.length || s.scenes?.length || s.clipsCount || 0} Slides
-                        </span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1 font-medium">
-                          <ClockIcon className="w-3.5 h-3.5 text-slate-400" />
-                          {Math.floor(s.totalDuration || 0)}s
-                        </span>
-                        <span>•</span>
-                        <span className="font-mono text-[10px] text-slate-400">
-                          ID: {safeId.length > 16 ? `${safeId.substring(0, 16)}...` : safeId}
-                        </span>
+                      <div className="flex items-center gap-2 text-slate-400 group-hover:text-slate-600 dark:group-hover:text-slate-300">
+                        <span className="text-[11px] font-semibold">{isCollapsed ? "Expand" : "Collapse"}</span>
+                        {isCollapsed ? <ChevronRightIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-                      {/* Share button for owner */}
-                      {isOwner && (
-                        <button
-                          onClick={() => setSelectedSessionForSharing({ ...s, id: safeId })}
-                          className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5"
-                          title="Share with other users"
-                        >
-                          <ShareIcon className="w-3.5 h-3.5 text-indigo-600" />
-                          Share
-                        </button>
-                      )}
-
-                      {/* Duplicate / Save Copy button for non-owner */}
-                      {!isOwner && (
-                        <button
-                          onClick={() => handleCloneToMyAccount({ ...s, id: safeId })}
-                          disabled={cloningId === safeId}
-                          className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50"
-                          title="Save a copy of this tour to your account"
-                        >
-                          <DocumentDuplicateIcon className="w-3.5 h-3.5 text-indigo-600" />
-                          {cloningId === safeId ? "Copying..." : "Save a Copy"}
-                        </button>
-                      )}
-
-                      {/* Load into Editor */}
-                      <button
-                        onClick={() => {
-                          onLoadSession({ ...s, id: safeId });
-                          onClose();
-                        }}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition active:scale-95 shadow"
-                      >
-                        Load Project
-                      </button>
-
-                      {/* Delete button (owner only) */}
-                      {isOwner && (
-                        <button
-                          onClick={() => handleDelete(safeId)}
-                          disabled={deletingId === safeId}
-                          title="Delete session"
-                          className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition"
-                        >
-                          <TrashIcon className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
+                    {/* Sessions inside this project */}
+                    {!isCollapsed && (
+                      <div className="space-y-2 pt-1 pl-1">
+                        {sessionsInProject.map((s, idx) => {
+                          const safeId = String(s?.id || `session_${projectName}_${idx}`);
+                          return renderSessionCard(s, safeId);
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
+              })
+            ) : (
+              // Flat List View
+              displayedSessions.map((s, idx) => {
+                const safeId = String(s?.id || `session_${idx}`);
+                return renderSessionCard(s, safeId);
               })
             )}
           </div>
@@ -488,8 +923,8 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
           {/* Footer */}
           <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center text-[11px] text-slate-400">
             <span>
-              {activeTab === "mine" ? `${mySessions.length} projects in your account` :
-               activeTab === "shared" ? `${sharedSessions.length} projects shared with you` :
+              {activeTab === "mine" ? `${mySessions.length} total sessions across projects in your account` :
+               activeTab === "shared" ? `${sharedSessions.length} sessions shared with you` :
                `${communitySessions.length} community tours`}
             </span>
             <button 

@@ -3,9 +3,10 @@ import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './typ
 import { TourService } from './services/geminiService';
 import { pcmBase64ToWavBlob, stitchClipsClientSide } from './services/screenStudioEngine';
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { auth, logoutUser, saveUserSession, getSessionById, SavedProjectSession } from './services/firebase';
+import { auth, logoutUser, saveUserSession, getUserSessions, getSessionById, SavedProjectSession } from './services/firebase';
 import { AuthModal } from './components/AuthModal';
 import { SavedSessionsModal } from './components/SavedSessionsModal';
+import { SaveSessionDialog } from './components/SaveSessionDialog';
 import { 
   PlusIcon, 
   SparklesIcon, 
@@ -36,7 +37,8 @@ import {
   UserIcon,
   ArrowRightOnRectangleIcon,
   DocumentArrowUpIcon,
-  UserGroupIcon
+  UserGroupIcon,
+  FolderIcon
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
@@ -89,9 +91,13 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isSessionsModalOpen, setIsSessionsModalOpen] = useState(false);
+  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [isQuickSaving, setIsQuickSaving] = useState(false);
   const [quickSaveFeedback, setQuickSaveFeedback] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [currentSessionName, setCurrentSessionName] = useState<string>('');
+  const [currentProjectName, setCurrentProjectName] = useState<string>('General');
+  const [knownProjects, setKnownProjects] = useState<string[]>([]);
 
   // Subscribe to Firebase Auth state
   useEffect(() => {
@@ -100,6 +106,24 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Fetch known project names when user logs in
+  useEffect(() => {
+    if (currentUser?.uid) {
+      getUserSessions(currentUser.uid)
+        .then((sessions) => {
+          const set = new Set<string>();
+          sessions.forEach((s) => {
+            const p = s.projectName?.trim();
+            if (p) set.add(p);
+          });
+          if (set.size > 0) {
+            setKnownProjects(Array.from(set).sort());
+          }
+        })
+        .catch(() => {});
+    }
+  }, [currentUser]);
 
   // Derived state for duration tracking
   const totalDuration = useMemo(() => {
@@ -256,7 +280,9 @@ export default function App() {
     const calculatedDuration = clipsToSave.reduce((sum, c) => sum + (c.duration || 0), 0) || totalDuration;
 
     return {
-      title: input.name || editorState.youtubeMetadata?.title || 'TourGenie 90s App Tour',
+      title: currentSessionName || input.name || editorState.youtubeMetadata?.title || 'TourGenie 90s App Tour',
+      sessionName: currentSessionName || input.name || 'TourGenie 90s App Tour',
+      projectName: currentProjectName || 'General',
       description: input.description || '',
       appUrl: input.url || '',
       script: input.script || '',
@@ -270,19 +296,28 @@ export default function App() {
     };
   };
 
-  const handleQuickSaveSession = async () => {
+  const handleQuickSaveSession = () => {
     if (!currentUser) {
       setIsAuthModalOpen(true);
       return;
     }
+    setIsSaveDialogOpen(true);
+  };
+
+  const handleSaveSessionWithProject = async (sessionName: string, projectName: string) => {
+    if (!currentUser) return;
     setIsQuickSaving(true);
     setQuickSaveFeedback(null);
     try {
       const project = getCompiledProject();
-      const title = input.name.trim() || editorState.youtubeMetadata?.title || project.title || 'TourGenie App Tour';
+      const cleanSessionName = sessionName.trim() || 'TourGenie App Tour';
+      const cleanProjectName = projectName.trim() || 'General';
+
       const sessionId = await saveUserSession(currentUser.uid, {
         id: activeSessionId || `session_${Date.now()}`,
-        title,
+        title: cleanSessionName,
+        sessionName: cleanSessionName,
+        projectName: cleanProjectName,
         appDescription: input.description || project.description || '',
         appUrl: input.url || project.appUrl || '',
         script: input.script || project.script || '',
@@ -295,13 +330,18 @@ export default function App() {
         screenshots: input.screenshots,
         youtubeMetadata: editorState.youtubeMetadata
       });
+
       setActiveSessionId(sessionId);
-      setQuickSaveFeedback(`Saved ${project.clips.length} slides to Cloud!`);
-      setTimeout(() => setQuickSaveFeedback(null), 3000);
+      setCurrentSessionName(cleanSessionName);
+      setCurrentProjectName(cleanProjectName);
+      setKnownProjects(prev => Array.from(new Set([...prev, cleanProjectName])).sort());
+      setQuickSaveFeedback(`Saved to [${cleanProjectName}]!`);
+      setTimeout(() => setQuickSaveFeedback(null), 3500);
     } catch (err: any) {
       console.error('Failed to save session:', err);
       setQuickSaveFeedback('Save Failed');
       setTimeout(() => setQuickSaveFeedback(null), 3500);
+      throw err;
     } finally {
       setIsQuickSaving(false);
     }
@@ -311,6 +351,13 @@ export default function App() {
     if (!session) return;
     const sessionId = session.id || `session_${Date.now()}`;
     setActiveSessionId(sessionId);
+
+    // Track active session & project naming
+    const restoredSessionName = session.sessionName || session.title || '';
+    const restoredProjectName = session.projectName || 'General';
+    setCurrentSessionName(restoredSessionName);
+    setCurrentProjectName(restoredProjectName);
+    setKnownProjects(prev => Array.from(new Set([...prev, restoredProjectName])).sort());
 
     // 1. Restore input details (Name, URL, Description, Script, Screenshots)
     const restoredScreenshots: string[] = session.screenshots && session.screenshots.length > 0
@@ -966,6 +1013,18 @@ export default function App() {
         <div className="flex items-center gap-3">
           {currentUser ? (
             <div className="flex items-center gap-2">
+              {/* Current Project / Session Badge */}
+              <button
+                onClick={() => setIsSessionsModalOpen(true)}
+                title="Current Session and Project (Click to browse all)"
+                className="hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 bg-indigo-50/70 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 border border-indigo-200/80 dark:border-slate-700 transition"
+              >
+                <FolderIcon className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="font-bold text-slate-900 dark:text-white max-w-[110px] truncate">{currentProjectName || "General"}</span>
+                <span className="text-slate-400">/</span>
+                <span className="text-indigo-600 dark:text-indigo-400 max-w-[120px] truncate">{currentSessionName || input.name || "Untitled Tour"}</span>
+              </button>
+
               {/* Quick Save Project Button */}
               <button
                 onClick={handleQuickSaveSession}
@@ -1846,6 +1905,18 @@ export default function App() {
           setQuickSaveFeedback(`Signed in as ${user.displayName || (user.isAnonymous ? 'Guest' : user.email)}`);
           setTimeout(() => setQuickSaveFeedback(null), 3500);
         }}
+      />
+
+      {/* SAVE SESSION TO PROJECT DIALOG */}
+      <SaveSessionDialog
+        isOpen={isSaveDialogOpen}
+        onClose={() => setIsSaveDialogOpen(false)}
+        onSave={handleSaveSessionWithProject}
+        defaultSessionName={currentSessionName || input.name || editorState.youtubeMetadata?.title || 'TourGenie App Tour'}
+        defaultProjectName={currentProjectName || 'General'}
+        existingProjects={knownProjects}
+        slideCount={editorState.clips.length || state.scenes.length || input.screenshots.length || 0}
+        totalDuration={totalDuration}
       />
 
       {/* SAVED SESSIONS MODAL */}

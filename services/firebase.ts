@@ -110,6 +110,8 @@ export interface SavedProjectSession {
   ownerEmail?: string;
   ownerName?: string;
   title: string;
+  sessionName?: string;
+  projectName?: string;
   appDescription?: string;
   appUrl?: string;
   script?: string;
@@ -260,12 +262,17 @@ export async function saveUserSession(
   const totalDuration = session.totalDuration || processedClips.reduce((sum, c) => sum + (c.duration || 0), 0) || (processedScenes.length * 15);
   const clipsCount = Math.max(processedClips.length, processedScenes.length, processedScreenshots.length, session.clipsCount || 0);
 
+  const effectiveSessionName = session.sessionName?.trim() || session.title?.trim() || "TourGenie Session";
+  const effectiveProjectName = session.projectName?.trim() || "Default Project";
+
   const cleanSessionData: SavedProjectSession = {
     id: sessionId,
     userId,
     ownerEmail: currentUser?.email || session.ownerEmail || "",
     ownerName: currentUser?.displayName || session.ownerName || (currentUser?.isAnonymous ? "Guest User" : "TourGenie Creator"),
-    title: session.title || "TourGenie Project",
+    title: effectiveSessionName,
+    sessionName: effectiveSessionName,
+    projectName: effectiveProjectName,
     appDescription: session.appDescription || "",
     appUrl: session.appUrl || "",
     script: session.script || "",
@@ -537,15 +544,51 @@ export async function deleteUserSession(userId: string, sessionId: string): Prom
   }
 }
 
+export async function updateSessionOrganization(
+  userId: string,
+  sessionId: string,
+  updates: { sessionName?: string; projectName?: string }
+): Promise<void> {
+  const cleanUpdates: Record<string, any> = {
+    updatedAt: serverTimestamp()
+  };
+  if (updates.sessionName !== undefined) {
+    const trimmed = updates.sessionName.trim() || "TourGenie Session";
+    cleanUpdates.sessionName = trimmed;
+    cleanUpdates.title = trimmed;
+  }
+  if (updates.projectName !== undefined) {
+    cleanUpdates.projectName = updates.projectName.trim() || "Default Project";
+  }
+
+  try {
+    const globalRef = doc(db, "sessions", sessionId);
+    await updateDoc(globalRef, cleanUpdates);
+
+    if (userId) {
+      try {
+        const userRef = doc(db, "users", userId, "sessions", sessionId);
+        await updateDoc(userRef, cleanUpdates);
+      } catch (e) {
+        // User subcollection might be absent or mirrored
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `sessions/${sessionId}`);
+  }
+}
+
 export async function duplicateSharedSessionToMyAccount(
   sourceSession: SavedProjectSession, 
   newOwnerUserId: string
 ): Promise<string> {
-  const newTitle = `${sourceSession.title} (Copy)`;
+  const newName = `${sourceSession.sessionName || sourceSession.title} (Copy)`;
   return await saveUserSession(newOwnerUserId, {
     ...sourceSession,
     id: `session_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    title: newTitle,
+    title: newName,
+    sessionName: newName,
+    projectName: sourceSession.projectName || "Default Project",
     sharedWithEmails: [],
     isPublic: false
   });
