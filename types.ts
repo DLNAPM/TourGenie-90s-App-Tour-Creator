@@ -26,7 +26,7 @@ export interface GenerationState {
 
 export interface EditorClip {
   id: string;
-  file: File;
+  file?: File;
   previewUrl: string;
   duration: number;
   narration?: string;

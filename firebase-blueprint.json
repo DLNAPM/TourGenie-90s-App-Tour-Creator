@@ -1,0 +1,31 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "userId": "string",
+        "email": "string?",
+        "displayName": "string?",
+        "photoURL": "string?",
+        "isAnonymous": "boolean",
+        "createdAt": "timestamp",
+        "lastLoginAt": "timestamp"
+      }
+    },
+    "UserSession": {
+      "collection": "users/{userId}/sessions",
+      "fields": {
+        "sessionId": "string",
+        "userId": "string",
+        "title": "string",
+        "appDescription": "string?",
+        "clips": "array",
+        "totalDuration": "number",
+        "combinedVideoUrl": "string?",
+        "isRendered": "boolean",
+        "createdAt": "timestamp",
+        "updatedAt": "timestamp"
+      }
+    }
+  }
+}

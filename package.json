@@ -19,6 +19,7 @@
     "@types/multer": "^2.2.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "firebase": "^12.19.0",
     "multer": "^2.4.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"

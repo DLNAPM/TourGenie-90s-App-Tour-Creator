@@ -2,6 +2,10 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
 import { TourService } from './services/geminiService';
 import { pcmBase64ToWavBlob, stitchClipsClientSide } from './services/screenStudioEngine';
+import { User, onAuthStateChanged } from 'firebase/auth';
+import { auth, logoutUser, saveUserSession, SavedProjectSession } from './services/firebase';
+import { AuthModal } from './components/AuthModal';
+import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { 
   PlusIcon, 
   SparklesIcon, 
@@ -28,7 +32,10 @@ import {
   ClockIcon,
   CommandLineIcon,
   CpuChipIcon,
-  ArrowPathIcon
+  ArrowPathIcon,
+  UserIcon,
+  ArrowRightOnRectangleIcon,
+  DocumentArrowUpIcon
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
@@ -76,6 +83,22 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [videoEngineMode, setVideoEngineMode] = useState<'studio' | 'veo'>('studio');
   const previewScrollRef = useRef<HTMLDivElement>(null);
+
+  // Firebase Authentication & Session Persistence State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isSessionsModalOpen, setIsSessionsModalOpen] = useState(false);
+  const [isQuickSaving, setIsQuickSaving] = useState(false);
+  const [quickSaveFeedback, setQuickSaveFeedback] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  // Subscribe to Firebase Auth state
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Derived state for duration tracking
   const totalDuration = useMemo(() => {
@@ -152,6 +175,74 @@ export default function App() {
     }
     setError(msg || "An unexpected error occurred.");
     return false;
+  };
+
+  // --- Session Management Helpers ---
+  const handleQuickSaveSession = async () => {
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    setIsQuickSaving(true);
+    setQuickSaveFeedback(null);
+    try {
+      const title = input.name.trim() || editorState.youtubeMetadata?.title || 'TourGenie App Tour';
+      const sessionId = await saveUserSession(currentUser.uid, {
+        id: activeSessionId || `session_${Date.now()}`,
+        title,
+        appDescription: input.description || '',
+        clipsCount: editorState.clips.length,
+        totalDuration,
+        isRendered: editorState.isRendered,
+        combinedVideoUrl: editorState.combinedVideoUrl,
+        clips: editorState.clips,
+        youtubeMetadata: editorState.youtubeMetadata
+      });
+      setActiveSessionId(sessionId);
+      setQuickSaveFeedback('Saved to Cloud!');
+      setTimeout(() => setQuickSaveFeedback(null), 3000);
+    } catch (err: any) {
+      console.error('Failed to save session:', err);
+      setQuickSaveFeedback('Save Failed');
+      setTimeout(() => setQuickSaveFeedback(null), 3500);
+    } finally {
+      setIsQuickSaving(false);
+    }
+  };
+
+  const handleLoadSession = (session: SavedProjectSession) => {
+    setActiveSessionId(session.id);
+    setInput(prev => ({
+      ...prev,
+      name: session.title || prev.name,
+      description: session.appDescription || prev.description
+    }));
+
+    if (session.clips && session.clips.length > 0) {
+      const restoredClips: EditorClip[] = session.clips.map((c: any, index: number) => ({
+        id: c.id || `restored_${index}_${Date.now()}`,
+        duration: c.duration || 9,
+        status: 'ready',
+        narration: c.narration || '',
+        analysis: c.analysis || c.narration || '',
+        previewUrl: c.screenshotUrl || c.rawScreenshot || '',
+        audioUrl: c.audioUrl || ''
+      }));
+
+      setEditorState({
+        clips: restoredClips,
+        isProcessing: false,
+        includeVoiceover: true,
+        isRendering: false,
+        isRendered: !!session.isRendered,
+        combinedVideoUrl: session.combinedVideoUrl || undefined,
+        youtubeMetadata: session.youtubeMetadata || undefined
+      });
+
+      setActiveTab('editor');
+    }
+    setQuickSaveFeedback(`Loaded: ${session.title}`);
+    setTimeout(() => setQuickSaveFeedback(null), 3500);
   };
 
   // --- Utility: Get Video Duration ---
@@ -565,7 +656,7 @@ export default function App() {
     try {
       for (let i = 0; i < updatedClips.length; i++) {
         const clip = updatedClips[i];
-        if (clip.status === 'ready') continue;
+        if (clip.status === 'ready' || !clip.file) continue;
         updatedClips[i].status = 'analyzing';
         setEditorState(prev => ({ ...prev, clips: [...updatedClips] }));
         
@@ -626,23 +717,114 @@ export default function App() {
 
   return (
     <div className="min-h-screen text-slate-900 pb-20 relative">
-      <nav className="sticky top-0 z-50 glass border-b border-slate-200/50 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg">
-            <SparklesIcon className="w-6 h-6" />
+      <nav className="sticky top-0 z-50 glass border-b border-slate-200/50 px-6 py-3.5 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/20">
+              <SparklesIcon className="w-6 h-6" />
+            </div>
+            <div>
+              <span className="font-extrabold text-xl tracking-tight text-slate-900 block leading-tight">TourGenie</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">90s App Tour Studio</span>
+            </div>
           </div>
-          <span className="font-bold text-xl tracking-tight">TourGenie</span>
-        </div>
-        
-        <div className="flex bg-slate-100 p-1 rounded-xl">
-          <button onClick={() => setActiveTab('creator')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'creator' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>Tour Creator</button>
-          <button onClick={() => setActiveTab('editor')} className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'editor' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>Video Editor</button>
+          
+          <div className="hidden sm:flex bg-slate-100 p-1 rounded-xl">
+            <button onClick={() => setActiveTab('creator')} className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'creator' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>Tour Creator</button>
+            <button onClick={() => setActiveTab('editor')} className={`px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition ${activeTab === 'editor' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>Video Editor</button>
+          </div>
         </div>
 
-        <div className="hidden md:flex items-center gap-4">
-          <button onClick={handleKeySelection} className={`flex items-center gap-2 text-xs font-bold py-2 px-4 rounded-full border transition ${isApiReady ? 'bg-green-50 border-green-200 text-green-600' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+        {/* Authentication, Cloud Sessions & API Controls */}
+        <div className="flex items-center gap-3">
+          {currentUser ? (
+            <div className="flex items-center gap-2">
+              {/* Quick Save Project Button */}
+              <button
+                onClick={handleQuickSaveSession}
+                disabled={isQuickSaving}
+                title="Save current project to your cloud account"
+                className="flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition active:scale-95 shadow-sm"
+              >
+                {isQuickSaving ? (
+                  <ArrowPathIcon className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                ) : quickSaveFeedback ? (
+                  <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <DocumentArrowUpIcon className="w-3.5 h-3.5 text-indigo-600" />
+                )}
+                <span className="hidden md:inline">{quickSaveFeedback || 'Save Session'}</span>
+              </button>
+
+              {/* My Saved Tours Button */}
+              <button
+                onClick={() => setIsSessionsModalOpen(true)}
+                title="Browse and load saved projects"
+                className="flex items-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition active:scale-95 shadow-sm"
+              >
+                <FilmIcon className="w-3.5 h-3.5 text-slate-500" />
+                <span className="hidden md:inline">My Saved Tours</span>
+              </button>
+
+              {/* User Avatar & Logout */}
+              <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
+                {currentUser.photoURL ? (
+                  <img 
+                    src={currentUser.photoURL} 
+                    alt="User" 
+                    referrerPolicy="no-referrer"
+                    className="w-8 h-8 rounded-full border border-slate-200 shadow-sm object-cover" 
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-slate-800 text-white font-black text-xs flex items-center justify-center shadow-sm">
+                    {currentUser.isAnonymous ? 'G' : (currentUser.email?.[0]?.toUpperCase() || 'U')}
+                  </div>
+                )}
+                
+                <div className="hidden lg:block text-left">
+                  <div className="text-xs font-bold text-slate-900 leading-tight truncate max-w-[110px]">
+                    {currentUser.isAnonymous ? 'Guest User' : (currentUser.displayName || currentUser.email?.split('@')[0])}
+                  </div>
+                  <div className="text-[10px] font-semibold text-slate-400 leading-tight">
+                    {currentUser.isAnonymous ? 'Guest Session' : 'Google Account'}
+                  </div>
+                </div>
+
+                <button
+                  onClick={async () => {
+                    await logoutUser();
+                    setCurrentUser(null);
+                  }}
+                  title="Sign Out"
+                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                >
+                  <ArrowRightOnRectangleIcon className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="flex items-center gap-2 text-xs font-bold py-2 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white shadow-sm transition active:scale-95"
+              >
+                <UserIcon className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Sign In / Guest</span>
+              </button>
+            </div>
+          )}
+
+          {/* API Key Status */}
+          <button 
+            onClick={handleKeySelection} 
+            className={`hidden sm:flex items-center gap-2 text-xs font-bold py-2 px-3 rounded-xl border transition ${
+              isApiReady 
+                ? 'bg-green-50 border-green-200 text-green-700' 
+                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
             <div className={`w-2 h-2 rounded-full ${isApiReady ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`} />
-            {isApiReady ? 'Connected' : 'Connect Key'}
+            <span className="hidden lg:inline">{isApiReady ? 'Connected' : 'Connect Key'}</span>
           </button>
         </div>
       </nav>
@@ -1056,6 +1238,28 @@ export default function App() {
                           <EyeIcon className="w-5 h-5 text-indigo-400" /> {editorState.isRendered ? `Preview Master Video (${editorState.clips.length} Scenes)` : `Review Segments (${editorState.clips.length} Scenes)`}
                         </button>
 
+                        {/* Save Session to Cloud Button */}
+                        <button
+                          onClick={handleQuickSaveSession}
+                          disabled={isQuickSaving}
+                          className="w-full bg-indigo-600/20 hover:bg-indigo-600/30 py-3.5 rounded-2xl font-bold text-xs tracking-wide transition flex items-center justify-center gap-2 border border-indigo-500/30 text-indigo-200 active:scale-95"
+                        >
+                          {isQuickSaving ? (
+                            <ArrowPathIcon className="w-4 h-4 animate-spin text-indigo-400" />
+                          ) : (
+                            <DocumentArrowUpIcon className="w-4 h-4 text-indigo-400" />
+                          )}
+                          <span>
+                            {isQuickSaving 
+                              ? "Saving to Cloud..." 
+                              : quickSaveFeedback 
+                                ? quickSaveFeedback 
+                                : currentUser 
+                                  ? "Save Tour Session to Account" 
+                                  : "Sign In / Guest to Save Session"}
+                          </span>
+                        </button>
+
                         {editorState.isRendered && editorState.combinedVideoUrl && (
                           <div className="space-y-2">
                             <a 
@@ -1306,6 +1510,39 @@ export default function App() {
             </div>
         </div>
       )}
+
+      {/* AUTHENTICATION MODAL */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccess={(user) => {
+          setCurrentUser(user);
+          setQuickSaveFeedback(`Signed in as ${user.displayName || (user.isAnonymous ? 'Guest' : user.email)}`);
+          setTimeout(() => setQuickSaveFeedback(null), 3500);
+        }}
+      />
+
+      {/* SAVED SESSIONS MODAL */}
+      <SavedSessionsModal
+        isOpen={isSessionsModalOpen}
+        onClose={() => setIsSessionsModalOpen(false)}
+        userId={currentUser?.uid || ''}
+        onLoadSession={handleLoadSession}
+        currentProject={{
+          title: input.name || editorState.youtubeMetadata?.title || 'TourGenie 90s App Tour',
+          description: input.description || '',
+          clips: editorState.clips,
+          totalDuration,
+          isRendered: editorState.isRendered,
+          combinedVideoUrl: editorState.combinedVideoUrl,
+          youtubeMetadata: editorState.youtubeMetadata
+        }}
+        onSessionSaved={(sessionId) => {
+          setActiveSessionId(sessionId);
+          setQuickSaveFeedback('Project saved to cloud!');
+          setTimeout(() => setQuickSaveFeedback(null), 3500);
+        }}
+      />
 
       <footer className="fixed bottom-6 left-6 z-[60] flex gap-3">
         <div className="glass px-4 py-2 rounded-2xl border border-slate-200/50 flex items-center gap-3 shadow-2xl text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-indigo-600 transition-colors cursor-default">
