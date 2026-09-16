@@ -212,7 +212,9 @@ export default function App() {
   };
 
   const handleLoadSession = (session: SavedProjectSession) => {
-    setActiveSessionId(session.id);
+    if (!session) return;
+    const sessionId = session.id || `session_${Date.now()}`;
+    setActiveSessionId(sessionId);
     setInput(prev => ({
       ...prev,
       name: session.title || prev.name,
@@ -221,13 +223,13 @@ export default function App() {
 
     if (session.clips && session.clips.length > 0) {
       const restoredClips: EditorClip[] = session.clips.map((c: any, index: number) => ({
-        id: c.id || `restored_${index}_${Date.now()}`,
-        duration: c.duration || 9,
+        id: c?.id || `restored_${index}_${Date.now()}`,
+        duration: c?.duration || 9,
         status: 'ready',
-        narration: c.narration || '',
-        analysis: c.analysis || c.narration || '',
-        previewUrl: c.screenshotUrl || c.rawScreenshot || '',
-        audioUrl: c.audioUrl || ''
+        narration: c?.narration || '',
+        analysis: c?.analysis || c?.narration || '',
+        previewUrl: c?.screenshotUrl || c?.rawScreenshot || '',
+        audioUrl: c?.audioUrl || ''
       }));
 
       setEditorState({
@@ -242,7 +244,7 @@ export default function App() {
 
       setActiveTab('editor');
     }
-    setQuickSaveFeedback(`Loaded: ${session.title}`);
+    setQuickSaveFeedback(`Loaded: ${session.title || 'Tour'}`);
     setTimeout(() => setQuickSaveFeedback(null), 3500);
   };
 

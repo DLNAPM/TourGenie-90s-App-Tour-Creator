@@ -358,18 +358,19 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                 </p>
               </div>
             ) : (
-              displayedSessions.map((s) => {
+              displayedSessions.map((s, idx) => {
+                const safeId = s.id || `session_${idx}`;
                 const isOwner = s.userId === userId;
                 const sharedCount = s.sharedWithEmails?.length || 0;
                 return (
                   <div 
-                    key={s.id}
+                    key={safeId}
                     className="p-4 bg-white dark:bg-slate-800/80 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/80 rounded-2xl transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-sm font-black text-slate-900 dark:text-white truncate">
-                          {s.title}
+                          {s.title || "Untitled Tour"}
                         </h3>
                         {s.isRendered && (
                           <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-full">
@@ -410,7 +411,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                         </span>
                         <span>•</span>
                         <span className="font-mono text-[10px] text-slate-400">
-                          ID: {s.id.substring(0, 16)}...
+                          ID: {safeId.length > 16 ? `${safeId.substring(0, 16)}...` : safeId}
                         </span>
                       </div>
                     </div>
@@ -419,7 +420,7 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                       {/* Share button for owner */}
                       {isOwner && (
                         <button
-                          onClick={() => setSelectedSessionForSharing(s)}
+                          onClick={() => setSelectedSessionForSharing({ ...s, id: safeId })}
                           className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5"
                           title="Share with other users"
                         >
@@ -431,20 +432,20 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                       {/* Duplicate / Save Copy button for non-owner */}
                       {!isOwner && (
                         <button
-                          onClick={() => handleCloneToMyAccount(s)}
-                          disabled={cloningId === s.id}
+                          onClick={() => handleCloneToMyAccount({ ...s, id: safeId })}
+                          disabled={cloningId === safeId}
                           className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50"
                           title="Save a copy of this tour to your account"
                         >
                           <DocumentDuplicateIcon className="w-3.5 h-3.5 text-indigo-600" />
-                          {cloningId === s.id ? "Copying..." : "Save a Copy"}
+                          {cloningId === safeId ? "Copying..." : "Save a Copy"}
                         </button>
                       )}
 
                       {/* Load into Editor */}
                       <button
                         onClick={() => {
-                          onLoadSession(s);
+                          onLoadSession({ ...s, id: safeId });
                           onClose();
                         }}
                         className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition active:scale-95 shadow"
@@ -455,8 +456,8 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                       {/* Delete button (owner only) */}
                       {isOwner && (
                         <button
-                          onClick={() => handleDelete(s.id)}
-                          disabled={deletingId === s.id}
+                          onClick={() => handleDelete(safeId)}
+                          disabled={deletingId === safeId}
                           title="Delete session"
                           className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition"
                         >

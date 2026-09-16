@@ -254,7 +254,11 @@ export async function getUserSessions(userId: string): Promise<SavedProjectSessi
     const sessionsMap = new Map<string, SavedProjectSession>();
     
     snap.forEach((d) => {
-      sessionsMap.set(d.id, d.data() as SavedProjectSession);
+      const data = d.data() as SavedProjectSession;
+      sessionsMap.set(d.id, {
+        ...data,
+        id: data?.id || d.id
+      });
     });
 
     // Also check user subcollection for any older unmigrated records
@@ -263,7 +267,11 @@ export async function getUserSessions(userId: string): Promise<SavedProjectSessi
       const userSnap = await getDocs(userCol);
       userSnap.forEach((d) => {
         if (!sessionsMap.has(d.id)) {
-          sessionsMap.set(d.id, d.data() as SavedProjectSession);
+          const data = d.data() as SavedProjectSession;
+          sessionsMap.set(d.id, {
+            ...data,
+            id: data?.id || d.id
+          });
         }
       });
     } catch (e) {
@@ -290,7 +298,11 @@ export async function getSharedWithMeSessions(userEmail: string): Promise<SavedP
     const snap = await getDocs(q);
     const sessions: SavedProjectSession[] = [];
     snap.forEach((d) => {
-      sessions.push(d.data() as SavedProjectSession);
+      const data = d.data() as SavedProjectSession;
+      sessions.push({
+        ...data,
+        id: data?.id || d.id
+      });
     });
     return sessions;
   } catch (error) {
@@ -305,7 +317,11 @@ export async function getPublicSessions(): Promise<SavedProjectSession[]> {
     const snap = await getDocs(q);
     const sessions: SavedProjectSession[] = [];
     snap.forEach((d) => {
-      sessions.push(d.data() as SavedProjectSession);
+      const data = d.data() as SavedProjectSession;
+      sessions.push({
+        ...data,
+        id: data?.id || d.id
+      });
     });
     return sessions;
   } catch (error) {
@@ -318,7 +334,11 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
     const sessionRef = doc(db, "sessions", sessionId);
     const snap = await getDoc(sessionRef);
     if (snap.exists()) {
-      return snap.data() as SavedProjectSession;
+      const data = snap.data() as SavedProjectSession;
+      return {
+        ...data,
+        id: data?.id || snap.id
+      };
     }
     return null;
   } catch (error) {
@@ -339,6 +359,7 @@ export async function shareSessionWithEmail(
   try {
     const sessionRef = doc(db, "sessions", sessionId);
     const updatePayload: Record<string, any> = {
+      id: sessionId,
       sharedWithEmails: arrayUnion(normalizedEmail),
       updatedAt: serverTimestamp()
     };
@@ -417,6 +438,7 @@ export async function toggleSessionPublicAccess(
   try {
     const sessionRef = doc(db, "sessions", sessionId);
     const updatePayload: Record<string, any> = {
+      id: sessionId,
       isPublic,
       updatedAt: serverTimestamp()
     };
