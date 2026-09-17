@@ -988,10 +988,16 @@ export default function App() {
     try {
       const url = URL.createObjectURL(file);
       setUploadedMasterFile(file);
+      const cleanTitle = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ").trim();
       setEditorState(prev => ({
         ...prev,
         combinedVideoUrl: url,
-        isRendered: true
+        isRendered: true,
+        youtubeMetadata: prev.youtubeMetadata || {
+          title: cleanTitle || input.name || 'TourGenie 90s App Tour',
+          description: `Official 90-second product tour for ${input.name || cleanTitle || "this software"}.\n\nTimestamps:\n0:00 - Introduction\n0:15 - Core Workflow\n0:45 - Key Features\n1:15 - Summary\n\nCreated with TourGenie App Tour Studio.`,
+          tags: ['apptour', 'saas', 'software', 'tutorial', (input.name || 'app').toLowerCase().replace(/[^a-z0-9]/g, '')].filter(Boolean)
+        }
       }));
       setError(null);
       if (options?.openPreview) {
@@ -2479,6 +2485,15 @@ export default function App() {
         onUploadedMasterVideo={(file, url) => {
           setUploadedMasterFile(file);
           setEditorState(prev => ({ ...prev, combinedVideoUrl: url, isRendered: true }));
+        }}
+        onUpdateMetadata={(meta) => {
+          setEditorState(prev => ({
+            ...prev,
+            youtubeMetadata: {
+              ...prev.youtubeMetadata,
+              ...meta
+            }
+          }));
         }}
       />
 

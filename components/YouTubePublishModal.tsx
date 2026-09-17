@@ -40,6 +40,7 @@ interface YouTubePublishModalProps {
   onRenderMasterProject?: () => Promise<string | null>;
   initialUploadedFile?: File | null;
   onUploadedMasterVideo?: (file: File, url: string) => void;
+  onUpdateMetadata?: (metadata: { title: string; description: string; tags: string[] }) => void;
 }
 
 export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
@@ -53,7 +54,8 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   totalDurationSeconds,
   onRenderMasterProject,
   initialUploadedFile = null,
-  onUploadedMasterVideo
+  onUploadedMasterVideo,
+  onUpdateMetadata
 }) => {
   const [accessToken, setAccessToken] = useState<string | null>(getCachedYouTubeToken());
   const [channelInfo, setChannelInfo] = useState<YouTubeChannelInfo | null>(getCachedChannelInfo());
@@ -62,25 +64,27 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
 
   // Uploaded Stitched Video State
   const [uploadedFile, setUploadedFile] = useState<File | null>(initialUploadedFile || null);
-  const [uploadedVideoUrl, setUploadedVideoUrl] = useState<string | null>(null);
+  const [uploadedVideoUrl, setUploadedVideoUrl] = useState<string | null>(combinedVideoUrl || null);
   const [uploadedDuration, setUploadedDuration] = useState<number | null>(null);
   const [videoSourceMode, setVideoSourceMode] = useState<'upload' | 'assembled'>(
     initialUploadedFile ? 'upload' : (combinedVideoUrl ? 'assembled' : 'upload')
   );
   const [isDraggingVideo, setIsDraggingVideo] = useState(false);
   const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [videoPreviewError, setVideoPreviewError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
   // Active Video Stream State
-  const [activeVideoUrl, setActiveVideoUrl] = useState<string>(combinedVideoUrl);
+  const [activeVideoUrl, setActiveVideoUrl] = useState<string>(combinedVideoUrl || "");
   const [isAssembling, setIsAssembling] = useState(false);
 
-  // Form Fields
+  // Form Fields (initialized safely once on modal open)
   const [title, setTitle] = useState(defaultTitle || "TourGenie 90s App Tour");
   const [description, setDescription] = useState(defaultDescription || "");
-  const [tags, setTags] = useState<string[]>(defaultTags);
+  const [tags, setTags] = useState<string[]>(defaultTags && defaultTags.length > 0 ? defaultTags : ["apptour", "saas", "software", "tutorial"]);
   const [tagInput, setTagInput] = useState("");
   const [privacyStatus, setPrivacyStatus] = useState<'unlisted' | 'public' | 'private'>('unlisted');
+  const [metadataSavedFeedback, setMetadataSavedFeedback] = useState(false);
   
   // Confirmation & Upload State
   const [showConfirm, setShowConfirm] = useState(false);
@@ -91,18 +95,86 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   const [uploadResult, setUploadResult] = useState<YouTubeUploadResult | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  const prevIsOpenRef = useRef(false);
+
+  // Synchronize modal state ONLY once when transitioning from closed to open
+  // This prevents resetting user's edits to title, description, or tags on every re-render or typing keystroke!
+  useEffect(() => {
+    if (isOpen && !prevIsOpenRef.current) {
+      if (defaultTitle) setTitle(defaultTitle);
+      if (defaultDescription) setDescription(defaultDescription);
+      if (defaultTags && defaultTags.length > 0) {
+        setTags([...defaultTags]);
+      }
+      
+      const file = initialUploadedFile || uploadedFile;
+      if (file) {
+        setUploadedFile(file);
+        setVideoSourceMode('upload');
+        const url = combinedVideoUrl || URL.createObjectURL(file);
+        setUploadedVideoUrl(url);
+        setActiveVideoUrl(url);
+      } else if (combinedVideoUrl) {
+        setActiveVideoUrl(combinedVideoUrl);
+        setVideoSourceMode('assembled');
+      }
+
+      setUploadError(null);
+      setUploadResult(null);
+      setShowConfirm(false);
+      setShowVideoPreview(false);
+      setVideoPreviewError(null);
+      
+      const cached = getCachedYouTubeToken();
+      if (cached) {
+        setAccessToken(cached);
+        if (!channelInfo) {
+          fetchMyYouTubeChannel(cached)
+            .then(info => {
+              if (info) setChannelInfo(info);
+            })
+            .catch(err => {
+              console.warn("Could not retrieve channel info with cached token:", err);
+            });
+        }
+      }
+    }
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
+
+  // Sync edits back to parent so they persist in session
+  const notifyMetadataChange = (newTitle: string, newDesc: string, newTags: string[]) => {
+    if (onUpdateMetadata) {
+      onUpdateMetadata({
+        title: newTitle,
+        description: newDesc,
+        tags: newTags
+      });
+      setMetadataSavedFeedback(true);
+      setTimeout(() => setMetadataSavedFeedback(false), 2000);
+    }
+  };
+
+  const handleTitleChange = (newTitle: string) => {
+    setTitle(newTitle);
+    notifyMetadataChange(newTitle, description, tags);
+  };
+
+  const handleDescriptionChange = (newDesc: string) => {
+    setDescription(newDesc);
+    notifyMetadataChange(title, newDesc, tags);
+  };
+
   // Handle setting up an uploaded file
   const processUploadedFile = (file: File) => {
     try {
-      if (uploadedVideoUrl) {
-        URL.revokeObjectURL(uploadedVideoUrl);
-      }
       const url = URL.createObjectURL(file);
       setUploadedFile(file);
       setUploadedVideoUrl(url);
       setVideoSourceMode('upload');
       setActiveVideoUrl(url);
       setUploadError(null);
+      setVideoPreviewError(null);
 
       // Probe duration
       const tempVideo = document.createElement('video');
@@ -140,9 +212,6 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   };
 
   const handleRemoveUploadedFile = () => {
-    if (uploadedVideoUrl) {
-      URL.revokeObjectURL(uploadedVideoUrl);
-    }
     setUploadedFile(null);
     setUploadedVideoUrl(null);
     setUploadedDuration(null);
@@ -152,39 +221,6 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
       videoInputRef.current.value = '';
     }
   };
-
-  // Synchronize defaults when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      if (defaultTitle) setTitle(defaultTitle);
-      if (defaultDescription) setDescription(defaultDescription);
-      if (defaultTags && defaultTags.length > 0) setTags(defaultTags);
-      
-      if (initialUploadedFile) {
-        processUploadedFile(initialUploadedFile);
-      } else if (combinedVideoUrl) {
-        setActiveVideoUrl(combinedVideoUrl);
-      }
-
-      setUploadError(null);
-      setUploadResult(null);
-      setShowConfirm(false);
-      
-      const cached = getCachedYouTubeToken();
-      if (cached) {
-        setAccessToken(cached);
-        if (!channelInfo) {
-          fetchMyYouTubeChannel(cached)
-            .then(info => {
-              if (info) setChannelInfo(info);
-            })
-            .catch(err => {
-              console.warn("Could not retrieve channel info with cached token:", err);
-            });
-        }
-      }
-    }
-  }, [isOpen, defaultTitle, defaultDescription, defaultTags, combinedVideoUrl, initialUploadedFile]);
 
   if (!isOpen) return null;
 
@@ -251,12 +287,14 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   };
 
   const processAndAddTags = (inputStr: string) => {
-    // Split by commas or whitespace if hashtags
+    // Split by commas, newlines, or whitespace if hashtags
     const rawTokens = inputStr.includes(',') 
       ? inputStr.split(',') 
-      : inputStr.includes('#') 
-        ? inputStr.split(/\s+/) 
-        : [inputStr];
+      : inputStr.includes('\n')
+        ? inputStr.split('\n')
+        : inputStr.includes('#') 
+          ? inputStr.split(/\s+/) 
+          : [inputStr];
 
     const newTokens: string[] = [];
     for (const raw of rawTokens) {
@@ -267,8 +305,10 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
     }
 
     if (newTokens.length > 0) {
-      setTags(prev => [...prev, ...newTokens].slice(0, 30));
+      const updated = [...tags, ...newTokens].slice(0, 30);
+      setTags(updated);
       setTagInput("");
+      notifyMetadataChange(title, description, updated);
     }
   };
 
@@ -276,6 +316,11 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
       processAndAddTags(tagInput);
+    } else if (e.key === "Backspace" && !tagInput && tags.length > 0) {
+      // Remove last tag if backspacing on empty input
+      const updated = tags.slice(0, -1);
+      setTags(updated);
+      notifyMetadataChange(title, description, updated);
     }
   };
 
@@ -288,8 +333,21 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
-    setTags(tags.filter(t => t !== tagToRemove));
+    const updated = tags.filter(t => t !== tagToRemove);
+    setTags(updated);
+    notifyMetadataChange(title, description, updated);
   };
+
+  const handleQuickAddTag = (tagToAdd: string) => {
+    if (!tags.includes(tagToAdd) && tags.length < 30) {
+      const updated = [...tags, tagToAdd];
+      setTags(updated);
+      notifyMetadataChange(title, description, updated);
+    }
+  };
+
+  // Determine effective preview URL for the inline player
+  const effectivePreviewUrl = uploadedVideoUrl || activeVideoUrl || combinedVideoUrl || (uploadedFile ? URL.createObjectURL(uploadedFile) : null);
 
   const handleStartPublish = async () => {
     if (!accessToken) {
@@ -309,19 +367,23 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
     setUploadError(null);
 
     try {
-      let videoBlob: Blob;
+      let videoBlob: Blob | null = null;
+      const fileToUse = uploadedFile || initialUploadedFile;
 
-      // If user selected or uploaded their pre-stitched master video file, use it directly!
-      if (videoSourceMode === 'upload' && uploadedFile) {
-        setUploadStage(`Preparing uploaded master file "${uploadedFile.name}" (${(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
+      // 1. DIRECT FILE UPLOAD (Foolproof: a File is already an in-memory Blob, no network fetch needed!)
+      if (fileToUse && (videoSourceMode === 'upload' || !activeVideoUrl)) {
+        setUploadStage(`Preparing master video file "${fileToUse.name}" (${(fileToUse.size / (1024 * 1024)).toFixed(1)} MB)...`);
         setUploadProgress(20);
-        videoBlob = uploadedFile;
+        videoBlob = fileToUse;
       } else {
+        // 2. Stream Assembly / Fetch Fallback
         let targetVideoUrl = activeVideoUrl || combinedVideoUrl;
 
-        // If master video has not been assembled yet, assemble on-the-fly!
+        // If no URL exists yet, trigger assemble or use file
         if (!targetVideoUrl) {
-          if (onRenderMasterProject) {
+          if (fileToUse) {
+            videoBlob = fileToUse;
+          } else if (onRenderMasterProject) {
             setUploadStage("Assembling & stitching all scenes into master 1080p MP4...");
             setUploadProgress(15);
             try {
@@ -338,37 +400,51 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
             }
           } else {
             setIsUploading(false);
-            setUploadError("No rendered master video found. Please assemble the project or upload your downloaded stitched video.");
+            setUploadError("No video found. Please upload your stitched video file or compile your project scenes.");
             return;
           }
         }
 
-        // Fetch the master video Blob from the targetVideoUrl
-        setUploadStage("Extracting master video binary stream...");
-        setUploadProgress(25);
-
-        try {
-          const videoRes = await fetch(targetVideoUrl);
-          if (!videoRes.ok) {
-            throw new Error(`Master video stream response status ${videoRes.status}`);
+        if (!videoBlob) {
+          if (!targetVideoUrl) {
+            setIsUploading(false);
+            setUploadError("No video source found. Please select your stitched video file or compile your scenes.");
+            return;
           }
-          videoBlob = await videoRes.blob();
-        } catch (streamErr) {
-          // If fetch failed (for example, expired blob URL from earlier page session), auto re-assemble!
-          if (onRenderMasterProject) {
-            setUploadStage("Re-assembling expired video stream from project clips...");
-            setUploadProgress(30);
-            const freshUrl = await onRenderMasterProject();
-            if (!freshUrl) throw new Error("Could not refresh master video stream.");
-            targetVideoUrl = freshUrl;
-            setActiveVideoUrl(freshUrl);
-            const retryRes = await fetch(freshUrl);
-            if (!retryRes.ok) throw new Error("Failed to load refreshed master video stream.");
-            videoBlob = await retryRes.blob();
-          } else {
-            throw streamErr;
+
+          setUploadStage("Extracting master video binary stream...");
+          setUploadProgress(25);
+
+          try {
+            const videoRes = await fetch(targetVideoUrl);
+            if (!videoRes.ok) {
+              throw new Error(`Master video stream response status ${videoRes.status}`);
+            }
+            videoBlob = await videoRes.blob();
+          } catch (streamErr: any) {
+            // If fetch failed (e.g. revoked blob URL or network error) AND an uploaded file is present, fall back immediately!
+            if (fileToUse) {
+              console.warn("Target stream fetch failed, falling back directly to uploaded file:", streamErr);
+              videoBlob = fileToUse;
+            } else if (onRenderMasterProject) {
+              setUploadStage("Re-assembling fresh master video stream from clips...");
+              setUploadProgress(30);
+              const freshUrl = await onRenderMasterProject();
+              if (!freshUrl) throw new Error("Could not refresh master video stream.");
+              targetVideoUrl = freshUrl;
+              setActiveVideoUrl(freshUrl);
+              const retryRes = await fetch(freshUrl);
+              if (!retryRes.ok) throw new Error("Failed to load refreshed master video stream.");
+              videoBlob = await retryRes.blob();
+            } else {
+              throw new Error(`Master video stream could not be loaded (${streamErr.message || streamErr}). Please re-select or upload your video file.`);
+            }
           }
         }
+      }
+
+      if (!videoBlob) {
+        throw new Error("No video data could be prepared for upload. Please re-select your stitched video file.");
       }
 
       // Upload to YouTube API
@@ -725,14 +801,29 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                         </div>
 
                         {/* Inline Video Player Preview */}
-                        {showVideoPreview && uploadedVideoUrl && (
-                          <div className="pt-2 border-t border-emerald-200/60 dark:border-emerald-800/40">
+                        {showVideoPreview && effectivePreviewUrl && (
+                          <div className="pt-3 border-t border-emerald-200/60 dark:border-emerald-800/40 space-y-2">
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                              <span className="font-semibold text-emerald-800 dark:text-emerald-300">
+                                Video Preview: {uploadedFile?.name || 'Stitched Tour File'}
+                              </span>
+                              {uploadedDuration ? <span className="font-mono">~{Math.round(uploadedDuration)}s</span> : null}
+                            </div>
                             <video
-                              src={uploadedVideoUrl}
+                              key={effectivePreviewUrl}
+                              src={effectivePreviewUrl}
                               controls
                               playsInline
-                              className="w-full max-h-52 rounded-xl bg-slate-950 object-contain shadow-inner"
+                              className="w-full max-h-56 rounded-xl bg-black object-contain shadow-inner border border-white/10"
+                              onError={() => {
+                                setVideoPreviewError("Direct browser preview could not load. You can still publish to YouTube, or click 'Change File' to re-select.");
+                              }}
                             />
+                            {videoPreviewError && (
+                              <p className="text-[11px] text-amber-500 font-medium">
+                                ⚠ {videoPreviewError}
+                              </p>
+                            )}
                           </div>
                         )}
                       </div>
@@ -766,7 +857,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
 
                 {/* TAB 2: PROJECT AUTO-STITCHED STREAM */}
                 {videoSourceMode === 'assembled' && (
-                  <div className={`p-4 rounded-2xl border transition-all ${
+                  <div className={`p-4 rounded-2xl border transition-all space-y-3 ${
                     activeVideoUrl 
                       ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60' 
                       : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800/80'
@@ -802,31 +893,54 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                         </div>
                       </div>
 
-                      {onRenderMasterProject && (
-                        <button
-                          type="button"
-                          disabled={isAssembling}
-                          onClick={handleAssembleMaster}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm shrink-0 active:scale-95 disabled:opacity-50 ${
-                            activeVideoUrl 
-                              ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300' 
-                              : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20'
-                          }`}
-                        >
-                          {isAssembling ? (
-                            <>
-                              <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-                              <span>Assembling Scenes...</span>
-                            </>
-                          ) : (
-                            <>
-                              <SparklesIcon className="w-3.5 h-3.5" />
-                              <span>{activeVideoUrl ? 'Re-Assemble' : 'Assemble Master Now'}</span>
-                            </>
-                          )}
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2 shrink-0">
+                        {activeVideoUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setShowVideoPreview(!showVideoPreview)}
+                            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 transition active:scale-95"
+                          >
+                            {showVideoPreview ? 'Hide Preview' : 'Preview Stream'}
+                          </button>
+                        )}
+                        {onRenderMasterProject && (
+                          <button
+                            type="button"
+                            disabled={isAssembling}
+                            onClick={handleAssembleMaster}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm shrink-0 active:scale-95 disabled:opacity-50 ${
+                              activeVideoUrl 
+                                ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300' 
+                                : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20'
+                            }`}
+                          >
+                            {isAssembling ? (
+                              <>
+                                <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
+                                <span>Assembling Scenes...</span>
+                              </>
+                            ) : (
+                              <>
+                                <SparklesIcon className="w-3.5 h-3.5" />
+                                <span>{activeVideoUrl ? 'Re-Assemble' : 'Assemble Master Now'}</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {showVideoPreview && effectivePreviewUrl && (
+                      <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                        <video
+                          key={effectivePreviewUrl}
+                          src={effectivePreviewUrl}
+                          controls
+                          playsInline
+                          className="w-full max-h-56 rounded-xl bg-black object-contain shadow-inner border border-white/10"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -836,10 +950,14 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                 {/* Title */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                      Video Title <span className="text-red-500">*</span>
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                      <span>Video Title</span>
+                      <span className="text-red-500">*</span>
+                      {metadataSavedFeedback && (
+                        <span className="text-[10px] text-emerald-500 font-semibold animate-pulse">✓ Saved</span>
+                      )}
                     </label>
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] text-slate-400 font-mono">
                       {title.length}/100
                     </span>
                   </div>
@@ -847,9 +965,9 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                     type="text"
                     maxLength={100}
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
+                    onChange={(e) => handleTitleChange(e.target.value)}
                     placeholder="TourGenie 90s App Tour"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500 transition"
                   />
                 </div>
 
@@ -859,7 +977,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
                       Description & Timestamps
                     </label>
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] text-slate-400 font-mono">
                       {description.length}/5000
                     </span>
                   </div>
@@ -867,46 +985,76 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                     rows={4}
                     maxLength={5000}
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
+                    onChange={(e) => handleDescriptionChange(e.target.value)}
                     placeholder="App overview, timestamps, and feature breakdown..."
-                    className="w-full p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500 font-sans leading-relaxed"
+                    className="w-full p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500 font-sans leading-relaxed transition"
                   />
                 </div>
 
                 {/* Tags */}
                 <div>
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1.5">
-                    SEO Tags (press Enter or comma)
-                  </label>
-                  <div className="flex flex-wrap gap-1.5 mb-2">
-                    {tags.map((tag) => (
-                      <span 
-                        key={tag}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold border border-indigo-200 dark:border-indigo-800"
-                      >
-                        #{tag}
-                        <button 
-                          type="button"
-                          onClick={() => handleRemoveTag(tag)}
-                          className="hover:text-red-500"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      SEO Tags ({tags.length}/30)
+                    </label>
+                    <span className="text-[10px] text-slate-400">
+                      Type & press Enter or comma
+                    </span>
                   </div>
+
+                  {/* Active Tags */}
+                  <div className="flex flex-wrap gap-1.5 mb-2.5 min-h-[32px] p-2 bg-slate-50/50 dark:bg-slate-900/40 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                    {tags.length === 0 ? (
+                      <span className="text-[11px] text-slate-400 italic py-0.5">No tags yet. Add tags below or click suggestions.</span>
+                    ) : (
+                      tags.map((tag) => (
+                        <span 
+                          key={tag}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold border border-indigo-200 dark:border-indigo-800 shadow-sm"
+                        >
+                          #{tag}
+                          <button 
+                            type="button"
+                            onClick={() => handleRemoveTag(tag)}
+                            className="hover:text-red-500 font-black ml-0.5 transition"
+                            title={`Remove #${tag}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))
+                    )}
+                  </div>
+
                   <input
                     type="text"
                     value={tagInput}
                     onChange={(e) => setTagInput(e.target.value)}
                     onKeyDown={handleAddTag}
                     onPaste={handleTagPaste}
-                    placeholder="Type or paste tags (e.g. app tour, saas, tutorial) and press Enter or comma..."
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                    placeholder="Type tags (e.g. apptour, saas, tutorial) and press Enter or comma..."
+                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500 transition"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Accepts comma-separated phrases, individual words, or hashtags (up to 30 tags). No # required.
-                  </p>
+
+                  {/* Quick Tag Suggestions */}
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    <span className="text-[10px] text-slate-400 font-medium">Suggestions:</span>
+                    {['apptour', 'saas', 'producttour', 'demo', 'tutorial', 'software', 'walkthrough'].map(sugg => (
+                      <button
+                        key={sugg}
+                        type="button"
+                        onClick={() => handleQuickAddTag(sugg)}
+                        disabled={tags.includes(sugg)}
+                        className={`text-[10px] px-2 py-0.5 rounded-md border transition ${
+                          tags.includes(sugg)
+                            ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 border-transparent cursor-default'
+                            : 'bg-slate-100 hover:bg-indigo-50 dark:bg-slate-800/80 dark:hover:bg-indigo-950/50 text-slate-600 dark:text-slate-300 hover:text-indigo-600 border-slate-200 dark:border-slate-700 active:scale-95'
+                        }`}
+                      >
+                        + #{sugg}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Privacy Status */}

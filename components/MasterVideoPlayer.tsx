@@ -57,6 +57,11 @@ export const MasterVideoPlayer: React.FC<MasterVideoPlayerProps> = ({
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverPosition, setHoverPosition] = useState(0);
   const [rippleAction, setRippleAction] = useState<{ type: 'rewind' | 'forward'; label: string; id: number } | null>(null);
+  const [videoLoadError, setVideoLoadError] = useState(false);
+
+  useEffect(() => {
+    setVideoLoadError(false);
+  }, [src]);
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -380,7 +385,23 @@ export const MasterVideoPlayer: React.FC<MasterVideoPlayerProps> = ({
           onEnded={handleVideoEnded}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
+          onError={() => setVideoLoadError(true)}
         />
+
+        {/* Playback Error Overlay */}
+        {videoLoadError && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center bg-black/85 backdrop-blur-md">
+            <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mb-3">
+              <FilmIcon className="w-6 h-6" />
+            </div>
+            <h4 className="text-sm font-bold text-white mb-1">
+              Video Preview Unavailable
+            </h4>
+            <p className="text-xs text-slate-300 max-w-md mb-4 leading-relaxed">
+              The temporary browser video stream has expired or the file could not be decoded. Please re-stitch your scenes or re-upload your downloaded video file.
+            </p>
+          </div>
+        )}
 
         {/* Click Area Overlay */}
         <div
