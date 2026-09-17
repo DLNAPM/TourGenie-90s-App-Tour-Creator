@@ -58,6 +58,8 @@ export default function App() {
 
   // YouTube Publishing Modal State
   const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
+  const [uploadedMasterFile, setUploadedMasterFile] = useState<File | null>(null);
+  const masterFileInputRef = useRef<HTMLInputElement>(null);
   
   // Tour Creator State
   const [input, setInput] = useState<AppInput>({
@@ -819,9 +821,26 @@ export default function App() {
   };
 
   // --- Real YouTube Data API v3 Publish Flow ---
+  const handleUploadedMasterFile = (file: File) => {
+    try {
+      const url = URL.createObjectURL(file);
+      setUploadedMasterFile(file);
+      setEditorState(prev => ({
+        ...prev,
+        combinedVideoUrl: url,
+        isRendered: true
+      }));
+      setPreviewMode('master');
+      setIsPreviewOpen(true);
+      setError(null);
+    } catch (e: any) {
+      setError("Could not load master video file.");
+    }
+  };
+
   const handleOpenYouTubePublish = () => {
-    if (!isDurationValid) {
-      setError("Please ensure your project clips meet the 90-second duration target.");
+    if (!isDurationValid && !editorState.combinedVideoUrl && !uploadedMasterFile) {
+      setError("Please ensure your project clips meet the duration target or upload your downloaded stitched video.");
       return;
     }
     setIsYouTubeModalOpen(true);
@@ -1772,11 +1791,32 @@ export default function App() {
                             </button>
                           </div>
                         )}
+
+                        {/* Hidden input to upload downloaded stitched master video */}
+                        <input
+                          ref={masterFileInputRef}
+                          type="file"
+                          accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.mkv"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleUploadedMasterFile(file);
+                          }}
+                          className="hidden"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => masterFileInputRef.current?.click()}
+                          className="w-full py-3 px-4 rounded-2xl bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/40 hover:border-indigo-400 text-indigo-300 text-xs font-bold transition flex items-center justify-center gap-2 active:scale-95 shadow-sm"
+                        >
+                          <CloudArrowUpIcon className="w-4 h-4 text-indigo-400" />
+                          <span>{uploadedMasterFile ? `Uploaded Stitched: ${uploadedMasterFile.name.slice(0, 22)}...` : 'Upload Downloaded Stitched Video'}</span>
+                        </button>
                         
                         <button 
-                          disabled={!isDurationValid}
+                          disabled={!isDurationValid && !uploadedMasterFile}
                           onClick={handleOpenYouTubePublish}
-                          className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${isDurationValid ? 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'}`}
+                          className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${isDurationValid || uploadedMasterFile ? 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'}`}
                         >
                           <PlayIcon className="w-6 h-6 fill-current" />
                           Push to YouTube
@@ -2053,6 +2093,11 @@ export default function App() {
         totalClipsCount={editorState.clips.length}
         totalDurationSeconds={totalDuration}
         onRenderMasterProject={() => handleRenderProject({ autoOpenPreview: false })}
+        initialUploadedFile={uploadedMasterFile}
+        onUploadedMasterVideo={(file, url) => {
+          setUploadedMasterFile(file);
+          setEditorState(prev => ({ ...prev, combinedVideoUrl: url, isRendered: true }));
+        }}
       />
 
       <footer className="fixed bottom-6 left-6 z-[60] flex gap-3">

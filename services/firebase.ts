@@ -30,8 +30,16 @@ import {
 import firebaseConfig from "../firebase-applet-config.json";
 import { compressImageForStorage } from "./imageOptimizer";
 
+// Ensure Google Authentication and Firestore always use gen-lang-client-0034495083
+export const effectiveFirebaseConfig = {
+  ...firebaseConfig,
+  projectId: "gen-lang-client-0034495083",
+  authDomain: "gen-lang-client-0034495083.firebaseapp.com",
+  storageBucket: "gen-lang-client-0034495083.firebasestorage.app"
+};
+
 // Initialize Firebase
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const app = getApps().length === 0 ? initializeApp(effectiveFirebaseConfig) : getApp();
 export const auth = getAuth(app);
 
 // Use the designated Firestore Database ID

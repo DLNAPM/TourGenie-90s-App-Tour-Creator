@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   YouTubeChannelInfo, 
   YouTubeUploadResult, 
@@ -22,7 +22,10 @@ import {
   LockClosedIcon,
   EyeIcon,
   ArrowUpTrayIcon,
-  FilmIcon
+  FilmIcon,
+  CloudArrowUpIcon,
+  TrashIcon,
+  DocumentCheckIcon
 } from "@heroicons/react/24/outline";
 
 interface YouTubePublishModalProps {
@@ -35,6 +38,8 @@ interface YouTubePublishModalProps {
   totalClipsCount: number;
   totalDurationSeconds: number;
   onRenderMasterProject?: () => Promise<string | null>;
+  initialUploadedFile?: File | null;
+  onUploadedMasterVideo?: (file: File, url: string) => void;
 }
 
 export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
@@ -46,12 +51,25 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   defaultTags = [],
   totalClipsCount,
   totalDurationSeconds,
-  onRenderMasterProject
+  onRenderMasterProject,
+  initialUploadedFile = null,
+  onUploadedMasterVideo
 }) => {
   const [accessToken, setAccessToken] = useState<string | null>(getCachedYouTubeToken());
   const [channelInfo, setChannelInfo] = useState<YouTubeChannelInfo | null>(getCachedChannelInfo());
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Uploaded Stitched Video State
+  const [uploadedFile, setUploadedFile] = useState<File | null>(initialUploadedFile || null);
+  const [uploadedVideoUrl, setUploadedVideoUrl] = useState<string | null>(null);
+  const [uploadedDuration, setUploadedDuration] = useState<number | null>(null);
+  const [videoSourceMode, setVideoSourceMode] = useState<'upload' | 'assembled'>(
+    initialUploadedFile ? 'upload' : (combinedVideoUrl ? 'assembled' : 'upload')
+  );
+  const [isDraggingVideo, setIsDraggingVideo] = useState(false);
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   // Active Video Stream State
   const [activeVideoUrl, setActiveVideoUrl] = useState<string>(combinedVideoUrl);
@@ -73,13 +91,81 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
   const [uploadResult, setUploadResult] = useState<YouTubeUploadResult | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
 
+  // Handle setting up an uploaded file
+  const processUploadedFile = (file: File) => {
+    try {
+      if (uploadedVideoUrl) {
+        URL.revokeObjectURL(uploadedVideoUrl);
+      }
+      const url = URL.createObjectURL(file);
+      setUploadedFile(file);
+      setUploadedVideoUrl(url);
+      setVideoSourceMode('upload');
+      setActiveVideoUrl(url);
+      setUploadError(null);
+
+      // Probe duration
+      const tempVideo = document.createElement('video');
+      tempVideo.preload = 'metadata';
+      tempVideo.onloadedmetadata = () => {
+        setUploadedDuration(tempVideo.duration);
+      };
+      tempVideo.src = url;
+
+      if (onUploadedMasterVideo) {
+        onUploadedMasterVideo(file, url);
+      }
+    } catch (e: any) {
+      console.error("Error processing uploaded video file:", e);
+      setUploadError("Could not process uploaded video file.");
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processUploadedFile(file);
+    }
+  };
+
+  const handleDropVideo = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingVideo(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|mov|mkv)$/i))) {
+      processUploadedFile(file);
+    } else {
+      setUploadError("Please upload a valid MP4, WebM, or MOV video file.");
+    }
+  };
+
+  const handleRemoveUploadedFile = () => {
+    if (uploadedVideoUrl) {
+      URL.revokeObjectURL(uploadedVideoUrl);
+    }
+    setUploadedFile(null);
+    setUploadedVideoUrl(null);
+    setUploadedDuration(null);
+    setVideoSourceMode('assembled');
+    setActiveVideoUrl(combinedVideoUrl || '');
+    if (videoInputRef.current) {
+      videoInputRef.current.value = '';
+    }
+  };
+
   // Synchronize defaults when modal opens
   useEffect(() => {
     if (isOpen) {
       if (defaultTitle) setTitle(defaultTitle);
       if (defaultDescription) setDescription(defaultDescription);
       if (defaultTags && defaultTags.length > 0) setTags(defaultTags);
-      if (combinedVideoUrl) setActiveVideoUrl(combinedVideoUrl);
+      
+      if (initialUploadedFile) {
+        processUploadedFile(initialUploadedFile);
+      } else if (combinedVideoUrl) {
+        setActiveVideoUrl(combinedVideoUrl);
+      }
+
       setUploadError(null);
       setUploadResult(null);
       setShowConfirm(false);
@@ -98,7 +184,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
         }
       }
     }
-  }, [isOpen, defaultTitle, defaultDescription, defaultTags, combinedVideoUrl]);
+  }, [isOpen, defaultTitle, defaultDescription, defaultTags, combinedVideoUrl, initialUploadedFile]);
 
   if (!isOpen) return null;
 
@@ -222,62 +308,70 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
     setUploadStage("Preparing master video stream for YouTube...");
     setUploadError(null);
 
-    let targetVideoUrl = activeVideoUrl || combinedVideoUrl;
-
-    // If master video has not been assembled yet, assemble on-the-fly!
-    if (!targetVideoUrl) {
-      if (onRenderMasterProject) {
-        setUploadStage("Assembling & stitching all scenes into master 1080p MP4...");
-        setUploadProgress(15);
-        try {
-          const renderedUrl = await onRenderMasterProject();
-          if (!renderedUrl) {
-            throw new Error("Could not assemble master video. Please check your scene clips.");
-          }
-          targetVideoUrl = renderedUrl;
-          setActiveVideoUrl(renderedUrl);
-        } catch (assembleErr: any) {
-          setIsUploading(false);
-          setUploadError(assembleErr.message || "Failed to assemble master video project.");
-          return;
-        }
-      } else {
-        setIsUploading(false);
-        setUploadError("No rendered master video found. Please assemble and render the project first.");
-        return;
-      }
-    }
-
     try {
-      // 1. Fetch the master video Blob from the targetVideoUrl
-      setUploadStage("Extracting master video binary stream...");
-      setUploadProgress(25);
-
       let videoBlob: Blob;
-      try {
-        const videoRes = await fetch(targetVideoUrl);
-        if (!videoRes.ok) {
-          throw new Error(`Master video stream response status ${videoRes.status}`);
+
+      // If user selected or uploaded their pre-stitched master video file, use it directly!
+      if (videoSourceMode === 'upload' && uploadedFile) {
+        setUploadStage(`Preparing uploaded master file "${uploadedFile.name}" (${(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
+        setUploadProgress(20);
+        videoBlob = uploadedFile;
+      } else {
+        let targetVideoUrl = activeVideoUrl || combinedVideoUrl;
+
+        // If master video has not been assembled yet, assemble on-the-fly!
+        if (!targetVideoUrl) {
+          if (onRenderMasterProject) {
+            setUploadStage("Assembling & stitching all scenes into master 1080p MP4...");
+            setUploadProgress(15);
+            try {
+              const renderedUrl = await onRenderMasterProject();
+              if (!renderedUrl) {
+                throw new Error("Could not assemble master video. Please check your scene clips.");
+              }
+              targetVideoUrl = renderedUrl;
+              setActiveVideoUrl(renderedUrl);
+            } catch (assembleErr: any) {
+              setIsUploading(false);
+              setUploadError(assembleErr.message || "Failed to assemble master video project.");
+              return;
+            }
+          } else {
+            setIsUploading(false);
+            setUploadError("No rendered master video found. Please assemble the project or upload your downloaded stitched video.");
+            return;
+          }
         }
-        videoBlob = await videoRes.blob();
-      } catch (streamErr) {
-        // If fetch failed (for example, expired blob URL from earlier page session), auto re-assemble!
-        if (onRenderMasterProject) {
-          setUploadStage("Re-assembling expired video stream from project clips...");
-          setUploadProgress(30);
-          const freshUrl = await onRenderMasterProject();
-          if (!freshUrl) throw new Error("Could not refresh master video stream.");
-          targetVideoUrl = freshUrl;
-          setActiveVideoUrl(freshUrl);
-          const retryRes = await fetch(freshUrl);
-          if (!retryRes.ok) throw new Error("Failed to load refreshed master video stream.");
-          videoBlob = await retryRes.blob();
-        } else {
-          throw streamErr;
+
+        // Fetch the master video Blob from the targetVideoUrl
+        setUploadStage("Extracting master video binary stream...");
+        setUploadProgress(25);
+
+        try {
+          const videoRes = await fetch(targetVideoUrl);
+          if (!videoRes.ok) {
+            throw new Error(`Master video stream response status ${videoRes.status}`);
+          }
+          videoBlob = await videoRes.blob();
+        } catch (streamErr) {
+          // If fetch failed (for example, expired blob URL from earlier page session), auto re-assemble!
+          if (onRenderMasterProject) {
+            setUploadStage("Re-assembling expired video stream from project clips...");
+            setUploadProgress(30);
+            const freshUrl = await onRenderMasterProject();
+            if (!freshUrl) throw new Error("Could not refresh master video stream.");
+            targetVideoUrl = freshUrl;
+            setActiveVideoUrl(freshUrl);
+            const retryRes = await fetch(freshUrl);
+            if (!retryRes.ok) throw new Error("Failed to load refreshed master video stream.");
+            videoBlob = await retryRes.blob();
+          } else {
+            throw streamErr;
+          }
         }
       }
 
-      // 2. Upload to YouTube API
+      // Upload to YouTube API
       const result = await uploadVideoToYouTube({
         videoBlob,
         title: title.trim(),
@@ -505,68 +599,226 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                 )}
               </div>
 
-              {/* MASTER VIDEO ASSET STATUS & 1-CLICK ASSEMBLY */}
-              <div className={`p-4 rounded-2xl border transition-all ${
-                activeVideoUrl 
-                  ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60' 
-                  : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800/80'
-              }`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className={`p-2 rounded-xl mt-0.5 ${
-                      activeVideoUrl 
-                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
-                        : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                    }`}>
-                      <FilmIcon className="w-5 h-5" />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-white">
-                          Master 1080p MP4 Stream
-                        </h4>
-                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
-                          activeVideoUrl 
-                            ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300' 
-                            : 'bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300'
-                        }`}>
-                          {activeVideoUrl ? 'Ready for YouTube' : 'Assembly Needed'}
-                        </span>
+              {/* MASTER VIDEO ASSET SOURCE SELECTION */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                    Master Video Source for YouTube
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    {videoSourceMode === 'upload' && uploadedFile 
+                      ? 'Using Uploaded Stitched File' 
+                      : (activeVideoUrl ? 'Using Auto-Stitched Project' : 'Video file required')}
+                  </span>
+                </div>
+
+                {/* Source Selection Tabs */}
+                <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVideoSourceMode('upload');
+                      if (uploadedVideoUrl) setActiveVideoUrl(uploadedVideoUrl);
+                    }}
+                    className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition ${
+                      videoSourceMode === 'upload'
+                        ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <CloudArrowUpIcon className="w-4 h-4" />
+                    <span>Upload Stitched Video</span>
+                    {uploadedFile && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVideoSourceMode('assembled');
+                      setActiveVideoUrl(combinedVideoUrl || '');
+                    }}
+                    className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition ${
+                      videoSourceMode === 'assembled'
+                        ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <FilmIcon className="w-4 h-4" />
+                    <span>Project Auto-Stitch</span>
+                    {combinedVideoUrl && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    )}
+                  </button>
+                </div>
+
+                {/* Hidden File Input */}
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.mkv"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+
+                {/* TAB 1: UPLOAD STITCHED VIDEO */}
+                {videoSourceMode === 'upload' && (
+                  <div className="space-y-2">
+                    {uploadedFile ? (
+                      <div className="p-4 rounded-2xl border bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60 transition-all space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5">
+                              <DocumentCheckIcon className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-white truncate">
+                                  {uploadedFile.name}
+                                </h4>
+                                <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 shrink-0">
+                                  Ready to Upload
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                                {(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB
+                                {uploadedDuration ? ` • ~${Math.round(uploadedDuration)}s runtime` : ''} • Stitched Video Override Active
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setShowVideoPreview(!showVideoPreview)}
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 transition"
+                            >
+                              {showVideoPreview ? 'Hide Preview' : 'Preview'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => videoInputRef.current?.click()}
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 transition"
+                            >
+                              Change File
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleRemoveUploadedFile}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
+                              title="Remove uploaded video"
+                            >
+                              <TrashIcon className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Inline Video Player Preview */}
+                        {showVideoPreview && uploadedVideoUrl && (
+                          <div className="pt-2 border-t border-emerald-200/60 dark:border-emerald-800/40">
+                            <video
+                              src={uploadedVideoUrl}
+                              controls
+                              playsInline
+                              className="w-full max-h-52 rounded-xl bg-slate-950 object-contain shadow-inner"
+                            />
+                          </div>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-400">
-                        {activeVideoUrl 
-                          ? `All ${totalClipsCount} scenes stitched into master broadcast video (${Math.floor(totalDurationSeconds)}s).`
-                          : `Project has ${totalClipsCount} scenes ready (${Math.floor(totalDurationSeconds)}s). Click assemble to compile into the broadcast master MP4.`
-                        }
-                      </p>
+                    ) : (
+                      <div
+                        onDragOver={(e) => { e.preventDefault(); setIsDraggingVideo(true); }}
+                        onDragLeave={() => setIsDraggingVideo(false)}
+                        onDrop={handleDropVideo}
+                        onClick={() => videoInputRef.current?.click()}
+                        className={`p-6 rounded-2xl border-2 border-dashed text-center cursor-pointer transition-all ${
+                          isDraggingVideo
+                            ? 'border-indigo-500 bg-indigo-50/60 dark:bg-indigo-950/30 scale-[0.99]'
+                            : 'border-slate-300 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 bg-slate-50/60 dark:bg-slate-800/40'
+                        }`}
+                      >
+                        <CloudArrowUpIcon className="w-8 h-8 text-indigo-500 dark:text-indigo-400 mx-auto mb-2" />
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-white">
+                          Click to select or drop your downloaded stitched tour video (.mp4)
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1">
+                          Have a master stitched video file you downloaded from TourGenie? Upload it here to guarantee 100% of scenes are pushed to YouTube.
+                        </p>
+                        <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                          <SparklesIcon className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+                          Bypasses auto-stitching • Exact downloaded scenes preserved
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 2: PROJECT AUTO-STITCHED STREAM */}
+                {videoSourceMode === 'assembled' && (
+                  <div className={`p-4 rounded-2xl border transition-all ${
+                    activeVideoUrl 
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60' 
+                      : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800/80'
+                  }`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <div className={`p-2 rounded-xl mt-0.5 ${
+                          activeVideoUrl 
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
+                            : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                        }`}>
+                          <FilmIcon className="w-5 h-5" />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-white">
+                              Master 1080p MP4 Stream
+                            </h4>
+                            <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                              activeVideoUrl 
+                                ? 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300' 
+                                : 'bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300'
+                            }`}>
+                              {activeVideoUrl ? 'Ready for YouTube' : 'Assembly Needed'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-slate-400">
+                            {activeVideoUrl 
+                              ? `All ${totalClipsCount} scenes stitched into master broadcast video (${Math.floor(totalDurationSeconds)}s).`
+                              : `Project has ${totalClipsCount} scenes ready (${Math.floor(totalDurationSeconds)}s). Click assemble to compile into the broadcast master MP4.`
+                            }
+                          </p>
+                        </div>
+                      </div>
+
+                      {onRenderMasterProject && (
+                        <button
+                          type="button"
+                          disabled={isAssembling}
+                          onClick={handleAssembleMaster}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm shrink-0 active:scale-95 disabled:opacity-50 ${
+                            activeVideoUrl 
+                              ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300' 
+                              : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20'
+                          }`}
+                        >
+                          {isAssembling ? (
+                            <>
+                              <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
+                              <span>Assembling Scenes...</span>
+                            </>
+                          ) : (
+                            <>
+                              <SparklesIcon className="w-3.5 h-3.5" />
+                              <span>{activeVideoUrl ? 'Re-Assemble' : 'Assemble Master Now'}</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
-
-                  {onRenderMasterProject && (
-                    <button
-                      type="button"
-                      disabled={isAssembling}
-                      onClick={handleAssembleMaster}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm shrink-0 active:scale-95 disabled:opacity-50 ${
-                        activeVideoUrl 
-                          ? 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-700 dark:text-slate-300' 
-                          : 'bg-amber-600 hover:bg-amber-700 text-white shadow-amber-600/20'
-                      }`}
-                    >
-                      {isAssembling ? (
-                        <>
-                          <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-                          <span>Assembling Scenes...</span>
-                        </>
-                      ) : (
-                        <>
-                          <SparklesIcon className="w-3.5 h-3.5" />
-                          <span>{activeVideoUrl ? 'Re-Assemble' : 'Assemble Master Now'}</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
 
               {/* STEP 2: METADATA & BROADCAST CONFIGURATION */}
@@ -720,7 +972,15 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                         Confirm YouTube Broadcast
                       </h4>
                       <p className="text-xs text-amber-800 dark:text-amber-300">
-                        You are about to upload this master video ({totalClipsCount} scenes, {Math.floor(totalDurationSeconds)}s) to YouTube channel: <strong>{channelInfo?.title || "your connected account"}</strong> as <strong>{privacyStatus.toUpperCase()}</strong>.
+                        {videoSourceMode === 'upload' && uploadedFile ? (
+                          <>
+                            You are about to upload your local stitched video file <strong>"{uploadedFile.name}"</strong> ({(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB{uploadedDuration ? `, ~${Math.round(uploadedDuration)}s` : ''}) to YouTube channel: <strong>{channelInfo?.title || "your connected account"}</strong> as <strong>{privacyStatus.toUpperCase()}</strong>.
+                          </>
+                        ) : (
+                          <>
+                            You are about to upload this master video ({totalClipsCount} scenes, {Math.floor(totalDurationSeconds)}s) to YouTube channel: <strong>{channelInfo?.title || "your connected account"}</strong> as <strong>{privacyStatus.toUpperCase()}</strong>.
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>
