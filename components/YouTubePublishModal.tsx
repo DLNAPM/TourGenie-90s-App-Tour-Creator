@@ -25,7 +25,8 @@ import {
   FilmIcon,
   CloudArrowUpIcon,
   TrashIcon,
-  DocumentCheckIcon
+  DocumentCheckIcon,
+  ExclamationTriangleIcon
 } from "@heroicons/react/24/outline";
 
 interface YouTubePublishModalProps {
@@ -589,6 +590,29 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
             </div>
           ) : (
             <>
+              {/* TOP ERROR ALERT IF PREVIOUS UPLOAD ATTEMPT FAILED */}
+              {uploadError && (
+                <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 flex items-start gap-3 animate-in fade-in duration-200">
+                  <ExclamationTriangleIcon className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 flex-1 text-left">
+                    <h5 className="text-xs font-bold text-rose-900 dark:text-rose-200">
+                      Upload Interrupted
+                    </h5>
+                    <p className="text-xs text-rose-700 dark:text-rose-300 leading-relaxed">
+                      {uploadError}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUploadError(null)}
+                    className="text-rose-400 hover:text-rose-600 dark:hover:text-rose-200 p-1"
+                    title="Dismiss"
+                  >
+                    <XMarkIcon className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
               {/* STEP 1: AUTHENTICATION / ACCOUNT IDENTIFIER */}
               <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between mb-3">

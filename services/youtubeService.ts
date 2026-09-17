@@ -109,33 +109,66 @@ export async function uploadVideoToYouTube({
     throw new Error("No YouTube OAuth access token available. Please sign in with your Google Account.");
   }
 
-  onProgress?.(10, "Preparing master video payload...");
+  const maxAttempts = 2;
+  let lastError: any = null;
 
-  const formData = new FormData();
-  formData.append("video", videoBlob, "master-tour.mp4");
-  formData.append("title", title);
-  formData.append("description", description);
-  formData.append("tags", JSON.stringify(tags));
-  formData.append("privacyStatus", privacyStatus);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (attempt > 1) {
+        onProgress?.(20, "Retrying master video upload to YouTube Data API...");
+        await new Promise(r => setTimeout(r, 2000));
+      } else {
+        onProgress?.(15, "Preparing master video payload...");
+      }
 
-  onProgress?.(30, "Transferring video to YouTube Data API...");
+      const formData = new FormData();
+      formData.append("video", videoBlob, "master-tour.mp4");
+      formData.append("title", title);
+      formData.append("description", description);
+      formData.append("tags", JSON.stringify(tags));
+      formData.append("privacyStatus", privacyStatus);
 
-  const res = await fetch("/api/youtube-upload", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`
-    },
-    body: formData
-  });
+      onProgress?.(35, "Streaming video to YouTube broadcast pipeline...");
 
-  onProgress?.(85, "Processing broadcast metadata and publishing...");
+      const res = await fetch("/api/youtube-upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: formData
+      });
 
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData.error || `YouTube upload failed with status ${res.status}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const rawMessage = errData.error || `YouTube upload failed with status ${res.status}`;
+
+        if ((res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxAttempts) {
+          console.warn(`[YouTube Upload] Gateway temporarily busy (${res.status}), retrying attempt ${attempt + 1}/${maxAttempts}...`);
+          onProgress?.(30, `YouTube gateway busy (${res.status}), automatically retrying upload...`);
+          continue;
+        }
+
+        let friendlyMessage = rawMessage;
+        if (res.status === 502) {
+          friendlyMessage = "YouTube upload gateway was temporarily unavailable (502 Bad Gateway). Please ensure your video is valid and try clicking Publish again.";
+        } else if (res.status === 401) {
+          friendlyMessage = "Your Google session has expired. Please disconnect and reconnect your YouTube account.";
+        }
+        throw new Error(friendlyMessage);
+      }
+
+      onProgress?.(90, "Finalizing broadcast metadata and registering video...");
+      const result: YouTubeUploadResult = await res.json();
+      onProgress?.(100, "Successfully published to YouTube!");
+      return result;
+    } catch (err: any) {
+      lastError = err;
+      if (attempt >= maxAttempts || (err.message && err.message.includes("Google session has expired"))) {
+        throw err;
+      }
+      console.warn(`[YouTube Upload] Attempt ${attempt} failed, retrying...`, err);
+    }
   }
 
-  const result: YouTubeUploadResult = await res.json();
-  onProgress?.(100, "Successfully published to YouTube!");
-  return result;
+  throw lastError || new Error("YouTube upload failed after multiple attempts.");
 }

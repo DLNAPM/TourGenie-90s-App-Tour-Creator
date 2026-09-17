@@ -811,7 +811,7 @@ async function startServer() {
     }
   });
 
-  // 10. Real YouTube Video Upload (Resumable Upload Protocol)
+  // 10. Real YouTube Video Upload (Resumable Upload Protocol with Chunking & Retry Engine)
   app.post("/api/youtube-upload", upload.single("video"), async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -826,7 +826,23 @@ async function startServer() {
       return res.status(400).json({ error: "No video file provided for YouTube upload." });
     }
 
+    const cleanupTempFile = () => {
+      try {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+      } catch (e) {}
+    };
+
     try {
+      const stats = fs.statSync(file.path);
+      const totalSize = stats.size;
+
+      if (totalSize === 0) {
+        cleanupTempFile();
+        return res.status(400).json({ error: "The provided video file is empty (0 bytes)." });
+      }
+
       const title = String(req.body.title || "TourGenie 90s App Tour").slice(0, 100);
       const description = String(req.body.description || "Created with TourGenie App Tour Studio").slice(0, 5000);
       let tags: string[] = [];
@@ -846,72 +862,222 @@ async function startServer() {
         ? req.body.privacyStatus 
         : 'unlisted';
 
-      console.log(`[YouTube API] Initiating resumable upload for "${title}" (${file.size} bytes, privacy: ${privacyStatus})...`);
+      console.log(`[YouTube API] Initiating resumable upload session for "${title}" (${totalSize} bytes, privacy: ${privacyStatus})...`);
 
-      // Step 1: Initiate Resumable Upload Session
-      const initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
-        method: "POST",
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "application/json; charset=UTF-8",
-          "X-Upload-Content-Length": String(file.size),
-          "X-Upload-Content-Type": "video/mp4"
-        },
-        body: JSON.stringify({
-          snippet: {
-            title,
-            description,
-            tags,
-            categoryId: "28" // Science & Technology
-          },
-          status: {
-            privacyStatus,
-            selfDeclaredMadeForKids: false
+      // Step 1: Initiate Resumable Upload Session with retries for transient 500/502/503/504
+      let initRes: Response | null = null;
+      let uploadUrl: string | null = null;
+      const maxInitAttempts = 3;
+
+      for (let attempt = 1; attempt <= maxInitAttempts; attempt++) {
+        try {
+          initRes = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", {
+            method: "POST",
+            headers: {
+              Authorization: authHeader,
+              "Content-Type": "application/json; charset=UTF-8",
+              "X-Upload-Content-Length": String(totalSize),
+              "X-Upload-Content-Type": "video/mp4"
+            },
+            body: JSON.stringify({
+              snippet: {
+                title,
+                description,
+                tags,
+                categoryId: "28" // Science & Technology
+              },
+              status: {
+                privacyStatus,
+                selfDeclaredMadeForKids: false
+              }
+            })
+          });
+
+          if (initRes.status === 401) {
+            cleanupTempFile();
+            return res.status(401).json({
+              error: "Your Google session has expired. Please disconnect and reconnect your YouTube account."
+            });
           }
-        })
-      });
 
-      if (!initRes.ok) {
-        const errData = await initRes.json().catch(() => ({}));
-        try { fs.unlinkSync(file.path); } catch (e) {}
-        console.error("[YouTube API] Initiation failed:", errData);
-        return res.status(initRes.status).json({
-          error: errData.error?.message || "YouTube upload initiation failed"
-        });
+          if ([500, 502, 503, 504].includes(initRes.status)) {
+            console.warn(`[YouTube API] Session init received status ${initRes.status} (attempt ${attempt}/${maxInitAttempts}). Retrying in ${attempt * 1.5}s...`);
+            if (attempt < maxInitAttempts) {
+              await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+              continue;
+            }
+          }
+
+          if (!initRes.ok) {
+            const errData = await initRes.json().catch(() => ({}));
+            cleanupTempFile();
+            console.error("[YouTube API] Initiation failed:", errData);
+            let userMsg = errData.error?.message || `YouTube upload initiation failed with status ${initRes.status}`;
+            if (userMsg.includes("quotaExceeded")) {
+              userMsg = "YouTube API daily upload quota exceeded. Please try again tomorrow or use a different Google account.";
+            } else if (userMsg.includes("channelNotFound") || userMsg.includes("youtubeSignupRequired")) {
+              userMsg = "No YouTube channel is associated with this Google Account. Please create a YouTube channel on youtube.com first.";
+            }
+            return res.status(initRes.status).json({ error: userMsg });
+          }
+
+          uploadUrl = initRes.headers.get("location");
+          if (uploadUrl) break;
+        } catch (fetchErr: any) {
+          console.warn(`[YouTube API] Session init network error (${fetchErr.message}) on attempt ${attempt}/${maxInitAttempts}`);
+          if (attempt < maxInitAttempts) {
+            await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+          } else {
+            throw fetchErr;
+          }
+        }
       }
 
-      const uploadUrl = initRes.headers.get("location");
       if (!uploadUrl) {
-        try { fs.unlinkSync(file.path); } catch (e) {}
-        throw new Error("YouTube did not provide a resumable upload location URL.");
+        cleanupTempFile();
+        return res.status(502).json({ error: "YouTube upload gateway did not return a valid session URL. Please try again." });
       }
 
-      console.log("[YouTube API] Upload session initialized, sending video stream...");
+      console.log(`[YouTube API] Upload session obtained. Streaming video binary in resilient chunks...`);
 
-      // Step 2: Transfer Video Binary
-      const videoBuffer = fs.readFileSync(file.path);
-      const uploadRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "video/mp4",
-          "Content-Length": String(videoBuffer.length)
-        },
-        body: videoBuffer
-      });
+      // Step 2: Transfer Video in Reliable 5MB Chunks (multiples of 256KB) with status query recovery
+      const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks (20 * 256KB)
+      const fd = fs.openSync(file.path, 'r');
+      let offset = 0;
+      let finalUploadData: any = null;
 
-      // Cleanup local temp file
-      try { fs.unlinkSync(file.path); } catch (e) {}
+      try {
+        while (offset < totalSize) {
+          const chunkEnd = Math.min(offset + CHUNK_SIZE, totalSize);
+          const currentChunkLength = chunkEnd - offset;
+          const chunkBuffer = Buffer.alloc(currentChunkLength);
+          fs.readSync(fd, chunkBuffer, 0, currentChunkLength, offset);
 
-      const uploadData = await uploadRes.json().catch(() => ({}));
-      if (!uploadRes.ok) {
-        console.error("[YouTube API] Video transfer failed:", uploadData);
-        return res.status(uploadRes.status).json({
-          error: uploadData.error?.message || "YouTube video processing failed"
-        });
+          const contentRange = `bytes ${offset}-${chunkEnd - 1}/${totalSize}`;
+          console.log(`[YouTube API] Uploading chunk: ${contentRange} (${Math.round((chunkEnd / totalSize) * 100)}%)...`);
+
+          let chunkSuccess = false;
+          let chunkAttempts = 0;
+          const maxChunkAttempts = 4;
+
+          while (!chunkSuccess && chunkAttempts < maxChunkAttempts) {
+            chunkAttempts++;
+            try {
+              const uploadRes = await fetch(uploadUrl, {
+                method: "PUT",
+                headers: {
+                  "Content-Type": "video/mp4",
+                  "Content-Length": String(currentChunkLength),
+                  "Content-Range": contentRange
+                },
+                body: chunkBuffer
+              });
+
+              // Status 308: Resume Incomplete (Chunk received successfully, awaiting more chunks)
+              if (uploadRes.status === 308) {
+                const rangeHeader = uploadRes.headers.get("range");
+                if (rangeHeader) {
+                  const match = rangeHeader.match(/bytes=0-(\d+)/);
+                  if (match) {
+                    offset = parseInt(match[1], 10) + 1;
+                  } else {
+                    offset = chunkEnd;
+                  }
+                } else {
+                  offset = chunkEnd;
+                }
+                chunkSuccess = true;
+                break;
+              }
+
+              // Status 200 or 201: Upload Complete!
+              if (uploadRes.status === 200 || uploadRes.status === 201) {
+                finalUploadData = await uploadRes.json().catch(() => ({}));
+                offset = totalSize;
+                chunkSuccess = true;
+                break;
+              }
+
+              // Status 500, 502, 503, 504: Retriable Google Gateway / Server error
+              if ([500, 502, 503, 504].includes(uploadRes.status)) {
+                console.warn(`[YouTube API] Chunk ${contentRange} received retriable status ${uploadRes.status} (attempt ${chunkAttempts}/${maxChunkAttempts}).`);
+                await new Promise(r => setTimeout(r, chunkAttempts * 1500));
+
+                // Query Google for actual received byte range
+                try {
+                  const checkRes = await fetch(uploadUrl, {
+                    method: "PUT",
+                    headers: {
+                      "Content-Range": `bytes */${totalSize}`,
+                      "Content-Length": "0"
+                    }
+                  });
+                  if (checkRes.status === 308) {
+                    const checkRange = checkRes.headers.get("range");
+                    if (checkRange) {
+                      const m = checkRange.match(/bytes=0-(\d+)/);
+                      if (m) {
+                        offset = parseInt(m[1], 10) + 1;
+                        console.log(`[YouTube API] Resuming from server-acknowledged offset ${offset}...`);
+                        chunkSuccess = true;
+                        break;
+                      }
+                    }
+                  } else if (checkRes.status === 200 || checkRes.status === 201) {
+                    finalUploadData = await checkRes.json().catch(() => ({}));
+                    offset = totalSize;
+                    chunkSuccess = true;
+                    break;
+                  }
+                } catch (checkErr) {
+                  console.warn("[YouTube API] Status check query error:", checkErr);
+                }
+                continue;
+              }
+
+              // Non-retriable error
+              const errBody = await uploadRes.json().catch(() => ({}));
+              console.error("[YouTube API] Chunk upload failed with fatal status:", uploadRes.status, errBody);
+              throw new Error(errBody.error?.message || `YouTube chunk upload failed with status ${uploadRes.status}`);
+            } catch (networkErr: any) {
+              console.warn(`[YouTube API] Network exception during chunk upload (${networkErr.message}) on attempt ${chunkAttempts}/${maxChunkAttempts}`);
+              if (chunkAttempts >= maxChunkAttempts) {
+                throw networkErr;
+              }
+              await new Promise(r => setTimeout(r, chunkAttempts * 1500));
+            }
+          }
+
+          if (!chunkSuccess && offset < totalSize) {
+            throw new Error("Failed to transmit video data after multiple retries due to intermittent YouTube gateway errors (502).");
+          }
+        }
+      } finally {
+        try { fs.closeSync(fd); } catch (e) {}
+        cleanupTempFile();
       }
 
-      const videoId = uploadData.id;
+      if (!finalUploadData || !finalUploadData.id) {
+        // Query status one final time if completed without response body
+        try {
+          const finalCheck = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: {
+              "Content-Range": `bytes */${totalSize}`,
+              "Content-Length": "0"
+            }
+          });
+          if (finalCheck.status === 200 || finalCheck.status === 201) {
+            finalUploadData = await finalCheck.json().catch(() => ({}));
+          }
+        } catch (e) {}
+      }
+
+      if (!finalUploadData?.id) {
+        throw new Error("Video upload completed but YouTube did not return the video registration ID.");
+      }
+
+      const videoId = finalUploadData.id;
       const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`[YouTube API] Video published successfully! ID: ${videoId} -> ${videoUrl}`);
 
@@ -919,14 +1085,12 @@ async function startServer() {
         success: true,
         videoId,
         videoUrl,
-        title: uploadData.snippet?.title || title,
-        privacyStatus: uploadData.status?.privacyStatus || privacyStatus
+        title: finalUploadData.snippet?.title || title,
+        privacyStatus: finalUploadData.status?.privacyStatus || privacyStatus
       });
     } catch (err: any) {
-      if (req.file) {
-        try { fs.unlinkSync(req.file.path); } catch (e) {}
-      }
-      console.error("[YouTube API] Error:", err);
+      cleanupTempFile();
+      console.error("[YouTube API] Publish failed:", err);
       res.status(500).json({ error: err.message || "Failed to upload video to YouTube" });
     }
   });
