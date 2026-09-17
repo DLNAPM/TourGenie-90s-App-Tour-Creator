@@ -59,6 +59,7 @@ export default function App() {
   // YouTube Publishing Modal State
   const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
   const [uploadedMasterFile, setUploadedMasterFile] = useState<File | null>(null);
+  const [isDraggingMaster, setIsDraggingMaster] = useState(false);
   const masterFileInputRef = useRef<HTMLInputElement>(null);
   
   // Tour Creator State
@@ -821,7 +822,7 @@ export default function App() {
   };
 
   // --- Real YouTube Data API v3 Publish Flow ---
-  const handleUploadedMasterFile = (file: File) => {
+  const handleUploadedMasterFile = (file: File, options?: { openPreview?: boolean; openPublish?: boolean }) => {
     try {
       const url = URL.createObjectURL(file);
       setUploadedMasterFile(file);
@@ -830,9 +831,14 @@ export default function App() {
         combinedVideoUrl: url,
         isRendered: true
       }));
-      setPreviewMode('master');
-      setIsPreviewOpen(true);
       setError(null);
+      if (options?.openPreview) {
+        setPreviewMode('master');
+        setIsPreviewOpen(true);
+      }
+      if (options?.openPublish) {
+        setIsYouTubeModalOpen(true);
+      }
     } catch (e: any) {
       setError("Could not load master video file.");
     }
@@ -1792,34 +1798,127 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* Hidden input to upload downloaded stitched master video */}
-                        <input
-                          ref={masterFileInputRef}
-                          type="file"
-                          accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.mkv"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) handleUploadedMasterFile(file);
-                          }}
-                          className="hidden"
-                        />
+                        {/* UPLOAD DOWNLOADED STITCHED VIDEO PRIOR TO YOUTUBE PUBLISHING */}
+                        <div className="p-4 rounded-2xl bg-slate-900/90 border border-indigo-500/30 space-y-3 shadow-inner">
+                          <div className="flex items-start gap-2.5">
+                            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 mt-0.5 shrink-0">
+                              <ArrowUpTrayIcon className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-xs font-black uppercase tracking-wider text-white">
+                                  Upload Stitched Video
+                                </h4>
+                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                  For YouTube
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-400 leading-relaxed mt-1">
+                                Downloaded your stitched video earlier? Upload your master <code className="text-indigo-300">.mp4</code> file here prior to publishing. This bypasses client-side stitching and guarantees 100% of all scenes and voiceovers are pushed intact to YouTube.
+                              </p>
+                            </div>
+                          </div>
 
-                        <button
-                          type="button"
-                          onClick={() => masterFileInputRef.current?.click()}
-                          className="w-full py-3 px-4 rounded-2xl bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/40 hover:border-indigo-400 text-indigo-300 text-xs font-bold transition flex items-center justify-center gap-2 active:scale-95 shadow-sm"
-                        >
-                          <CloudArrowUpIcon className="w-4 h-4 text-indigo-400" />
-                          <span>{uploadedMasterFile ? `Uploaded Stitched: ${uploadedMasterFile.name.slice(0, 22)}...` : 'Upload Downloaded Stitched Video'}</span>
-                        </button>
+                          {/* Hidden File Input */}
+                          <input
+                            ref={masterFileInputRef}
+                            type="file"
+                            accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.mkv"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleUploadedMasterFile(file);
+                            }}
+                            className="hidden"
+                          />
+
+                          {uploadedMasterFile ? (
+                            <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 space-y-2.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <CheckCircleIcon className="w-4 h-4 text-emerald-400 shrink-0" />
+                                  <span className="text-xs font-bold text-emerald-200 truncate" title={uploadedMasterFile.name}>
+                                    {uploadedMasterFile.name}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-emerald-400 font-mono shrink-0 font-semibold">
+                                  {(uploadedMasterFile.size / (1024 * 1024)).toFixed(1)} MB
+                                </span>
+                              </div>
+                              <p className="text-[10px] text-emerald-300/80 font-medium">
+                                ✓ Stitched video loaded & ready for YouTube upload.
+                              </p>
+                              <div className="flex items-center gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPreviewMode('master');
+                                    setIsPreviewOpen(true);
+                                  }}
+                                  className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-800/50 hover:bg-emerald-700/60 text-emerald-200 text-xs font-semibold transition text-center active:scale-95"
+                                >
+                                  Preview File
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => masterFileInputRef.current?.click()}
+                                  className="py-1.5 px-3 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition active:scale-95"
+                                >
+                                  Replace
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUploadedMasterFile(null);
+                                    if (masterFileInputRef.current) masterFileInputRef.current.value = '';
+                                  }}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 transition"
+                                  title="Remove uploaded video"
+                                >
+                                  <TrashIcon className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div
+                              onClick={() => masterFileInputRef.current?.click()}
+                              onDragOver={(e) => { e.preventDefault(); setIsDraggingMaster(true); }}
+                              onDragLeave={() => setIsDraggingMaster(false)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setIsDraggingMaster(false);
+                                const file = e.dataTransfer.files?.[0];
+                                if (file) handleUploadedMasterFile(file);
+                              }}
+                              className={`p-4 border-2 border-dashed rounded-xl text-center cursor-pointer transition ${
+                                isDraggingMaster
+                                  ? 'border-indigo-400 bg-indigo-500/10 scale-[0.99]'
+                                  : 'border-slate-700 hover:border-indigo-400/70 bg-slate-950/40 hover:bg-slate-950/70'
+                              }`}
+                            >
+                              <CloudArrowUpIcon className="w-6 h-6 text-indigo-400 mx-auto mb-1.5" />
+                              <p className="text-xs font-bold text-slate-200">
+                                Select or drop your downloaded stitched MP4
+                              </p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">
+                                Prior to publishing to YouTube (MP4, WebM, MOV)
+                              </p>
+                            </div>
+                          )}
+                        </div>
                         
                         <button 
-                          disabled={!isDurationValid && !uploadedMasterFile}
+                          disabled={!isDurationValid && !uploadedMasterFile && !editorState.combinedVideoUrl}
                           onClick={handleOpenYouTubePublish}
-                          className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${isDurationValid || uploadedMasterFile ? 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'}`}
+                          className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl ${
+                            isDurationValid || uploadedMasterFile || editorState.combinedVideoUrl
+                              ? uploadedMasterFile
+                                ? 'bg-gradient-to-r from-red-600 via-rose-600 to-red-600 hover:from-red-500 hover:to-rose-500 text-white active:scale-95 shadow-red-900/50 ring-2 ring-emerald-500/50'
+                                : 'bg-red-600 hover:bg-red-500 text-white active:scale-95 shadow-red-900/40'
+                              : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-white/5'
+                          }`}
                         >
                           <PlayIcon className="w-6 h-6 fill-current" />
-                          Push to YouTube
+                          <span>{uploadedMasterFile ? 'Publish Uploaded Stitched Video to YouTube' : 'Push to YouTube'}</span>
                         </button>
                       </div>
                     </div>
@@ -2005,12 +2104,26 @@ export default function App() {
                             setIsPreviewOpen(false);
                             setIsYouTubeModalOpen(true);
                           }}
-                          className="bg-red-600 hover:bg-red-500 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-2 transition active:scale-95 shadow-lg shadow-red-600/20"
+                          className={`font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-2 transition active:scale-95 shadow-lg ${
+                            uploadedMasterFile 
+                              ? 'bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white ring-2 ring-emerald-400/40 shadow-red-600/30' 
+                              : 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/20'
+                          }`}
                         >
                           <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
                             <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
                           </svg>
-                          Push to YouTube
+                          <span>{uploadedMasterFile ? 'Publish Uploaded to YouTube' : 'Push to YouTube'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => masterFileInputRef.current?.click()}
+                          className="bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/30 font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-2 transition active:scale-95"
+                          title="Upload your downloaded master stitched video prior to publishing"
+                        >
+                          <CloudArrowUpIcon className="w-4 h-4 text-indigo-400" />
+                          <span>{uploadedMasterFile ? `Uploaded: ${uploadedMasterFile.name.slice(0, 16)}...` : 'Upload Stitched Video'}</span>
                         </button>
 
                         <a

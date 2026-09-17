@@ -605,10 +605,17 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                   <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
                     Master Video Source for YouTube
                   </span>
-                  <span className="text-[11px] text-slate-400">
+                  <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
                     {videoSourceMode === 'upload' && uploadedFile 
-                      ? 'Using Uploaded Stitched File' 
-                      : (activeVideoUrl ? 'Using Auto-Stitched Project' : 'Video file required')}
+                      ? '✓ Uploaded Master File Ready' 
+                      : (activeVideoUrl ? 'Auto-Stitched Stream Ready' : 'Video file required')}
+                  </span>
+                </div>
+
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed bg-indigo-50/50 dark:bg-indigo-950/30 p-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50 flex items-start gap-2">
+                  <SparklesIcon className="w-4 h-4 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Did you download your stitched video earlier?</strong> Upload your downloaded <code className="text-indigo-600 dark:text-indigo-400 font-semibold">.mp4</code> file to guarantee that 100% of your scenes and audio are uploaded intact to YouTube.
                   </span>
                 </div>
 
@@ -620,7 +627,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                       setVideoSourceMode('upload');
                       if (uploadedVideoUrl) setActiveVideoUrl(uploadedVideoUrl);
                     }}
-                    className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition ${
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition ${
                       videoSourceMode === 'upload'
                         ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
                         : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -628,6 +635,9 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                   >
                     <CloudArrowUpIcon className="w-4 h-4" />
                     <span>Upload Stitched Video</span>
+                    <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/70 text-indigo-700 dark:text-indigo-300">
+                      Recommended
+                    </span>
                     {uploadedFile && (
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     )}
@@ -639,7 +649,7 @@ export const YouTubePublishModal: React.FC<YouTubePublishModalProps> = ({
                       setVideoSourceMode('assembled');
                       setActiveVideoUrl(combinedVideoUrl || '');
                     }}
-                    className={`flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition ${
+                    className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold transition ${
                       videoSourceMode === 'assembled'
                         ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
                         : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
