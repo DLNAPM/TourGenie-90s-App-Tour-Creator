@@ -536,21 +536,39 @@ async function startServer() {
     limits: { fileSize: 250 * 1024 * 1024 } // 250MB per file
   });
 
-  app.post("/api/stitch-master-video", upload.array("clips"), async (req, res) => {
-    const files = req.files as Express.Multer.File[];
-    if (!files || files.length === 0) {
+  app.post("/api/stitch-master-video", upload.any(), async (req, res) => {
+    const allFiles = (req.files as Express.Multer.File[]) || [];
+    if (!allFiles || allFiles.length === 0) {
       return res.status(400).json({ error: "No video clips received for stitching." });
     }
+
+    // Separate clips and optional synchronized audio tracks
+    const clips = allFiles.filter(f => f.fieldname === 'clips' || !f.fieldname.includes('audio'));
+    const audios = allFiles.filter(f => f.fieldname === 'audios' || f.fieldname.includes('audio'));
+
+    if (clips.length === 0) {
+      return res.status(400).json({ error: "No video clips found in payload." });
+    }
+
+    // Sort clips deterministically based on originalname (e.g. scene-1.mp4, scene-2.mp4)
+    clips.sort((a, b) => {
+      const matchA = a.originalname.match(/scene-(\d+)/i);
+      const matchB = b.originalname.match(/scene-(\d+)/i);
+      if (matchA && matchB) {
+        return parseInt(matchA[1], 10) - parseInt(matchB[1], 10);
+      }
+      return 0;
+    });
 
     const sessionDir = path.join(os.tmpdir(), `master-stitch-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`);
     fs.mkdirSync(sessionDir, { recursive: true });
 
     try {
-      console.log(`[Stitch Engine] Received ${files.length} clips for master video assembly in ${sessionDir}`);
+      console.log(`[Stitch Engine] Received ${clips.length} clips and ${audios.length} synchronized audios in ${sessionDir}`);
       const normalizedFiles: string[] = [];
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      for (let i = 0; i < clips.length; i++) {
+        const file = clips[i];
         const normPath = path.join(sessionDir, `norm_${i.toString().padStart(3, '0')}.mp4`);
         const mediaInfo = inspectMediaFile(file.path, file.mimetype, file.originalname);
         const typedInputPath = path.join(sessionDir, `input_${i}${mediaInfo.ext}`);
@@ -563,34 +581,66 @@ async function startServer() {
         }
         const effectiveInput = fs.existsSync(typedInputPath) ? typedInputPath : file.path;
 
+        // Check if there is an explicit audio track provided for this scene (e.g., scene-1.wav)
+        const clipMatch = file.originalname.match(/scene-(\d+)/i);
+        const targetSceneNum = clipMatch ? clipMatch[1] : `${i + 1}`;
+        const matchingAudio = audios.find(a => {
+          const aMatch = a.originalname.match(/scene-(\d+)/i);
+          return aMatch && aMatch[1] === targetSceneNum;
+        }) || (audios[i] && !clipMatch ? audios[i] : null);
+
+        let effectiveAudioPath: string | null = null;
+        if (matchingAudio) {
+          const typedAudioPath = path.join(sessionDir, `audio_${i}.wav`);
+          try {
+            fs.copyFileSync(matchingAudio.path, typedAudioPath);
+            if (fs.existsSync(typedAudioPath) && fs.statSync(typedAudioPath).size > 100) {
+              effectiveAudioPath = typedAudioPath;
+              console.log(`[Stitch Engine] Muxing synchronized voiceover audio for Scene ${targetSceneNum}`);
+            }
+          } catch (aErr) {
+            console.warn(`[Stitch Engine] Warning copying audio for scene ${i}:`, aErr);
+          }
+        }
+
         let normalizedSuccessfully = false;
 
-        // Case A: Input is a static image or screenshot - convert with -loop 1 to 10-second 1080p/720p H.264
+        // Case A: Input is a static image or screenshot - convert to MP4 loop animation with matched audio or silence
         if (mediaInfo.isImage) {
           try {
             console.log(`[Stitch Engine] Clip ${i} detected as image (${mediaInfo.ext}), generating loop animation`);
-            const imgCmd = `ffmpeg -y -loop 1 -t 10 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            let imgCmd = '';
+            if (effectiveAudioPath) {
+              imgCmd = `ffmpeg -y -loop 1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            } else {
+              imgCmd = `ffmpeg -y -loop 1 -t 10 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            }
             await execAsync(imgCmd);
             normalizedSuccessfully = true;
           } catch (imgErr: any) {
             console.warn(`[Stitch Engine] Image loop conversion warning for clip ${i}:`, imgErr?.message || imgErr);
           }
         } else {
-          // Case B: Video input - probe audio stream
-          let hasAudio = false;
-          try {
-            const { stdout } = await execAsync(`ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${effectiveInput}"`);
-            if (stdout.trim().length > 0) {
-              hasAudio = true;
+          // Case B: Video input - probe audio stream or use explicit voiceover audio
+          let hasInternalAudio = false;
+          if (!effectiveAudioPath) {
+            try {
+              const { stdout } = await execAsync(`ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${effectiveInput}"`);
+              if (stdout.trim().length > 0) {
+                hasInternalAudio = true;
+              }
+            } catch (probeErr) {
+              console.warn(`[Stitch Engine] ffprobe audio check warning for clip ${i}:`, probeErr);
             }
-          } catch (probeErr) {
-            console.warn(`[Stitch Engine] ffprobe audio check warning for clip ${i}:`, probeErr);
           }
 
           // Primary normalization attempt with error tolerance
           try {
             let normCmd = '';
-            if (hasAudio) {
+            if (effectiveAudioPath) {
+              // Mux explicit matched narration voiceover directly into the scene video
+              normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -map 0:v:0 -map 1:a:0 -shortest "${normPath}"`;
+            } else if (hasInternalAudio) {
               normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
             } else {
               normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
@@ -636,7 +686,7 @@ async function startServer() {
       }
 
       const stat = fs.statSync(masterPath);
-      console.log(`[Stitch Engine] Master tour generated successfully! Size: ${stat.size} bytes (${files.length} scenes stitched)`);
+      console.log(`[Stitch Engine] Master tour generated successfully! Size: ${stat.size} bytes (${clips.length} scenes stitched)`);
 
       const safeTitle = (req.body?.title ? String(req.body.title).replace(/[^a-zA-Z0-9_-]/g, '_') : 'Master_App_Tour');
       res.setHeader("Content-Type", "video/mp4");
@@ -648,7 +698,7 @@ async function startServer() {
       stream.on("close", () => {
         try {
           fs.rmSync(sessionDir, { recursive: true, force: true });
-          files.forEach(f => {
+          allFiles.forEach(f => {
             try { fs.unlinkSync(f.path); } catch (e) {}
           });
         } catch (cleanupErr) {
@@ -659,11 +709,11 @@ async function startServer() {
       console.error("[Stitch Engine] Error in /api/stitch-master-video:", err);
       try {
         fs.rmSync(sessionDir, { recursive: true, force: true });
-        files.forEach(f => {
+        allFiles.forEach(f => {
           try { fs.unlinkSync(f.path); } catch (e) {}
         });
       } catch (e) {}
-      res.status(500).json({ error: err.message || "Failed to stitch master video" });
+      res.status(500).json({ error: `Master stitching failed: ${err.message}` });
     }
   });
 

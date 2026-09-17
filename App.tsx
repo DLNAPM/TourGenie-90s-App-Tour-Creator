@@ -9,6 +9,7 @@ import { SavedSessionsModal } from './components/SavedSessionsModal';
 import { SaveSessionDialog } from './components/SaveSessionDialog';
 import { MasterVideoPlayer } from './components/MasterVideoPlayer';
 import { YouTubePublishModal } from './components/YouTubePublishModal';
+import { SceneScriptMatcherModal, SceneMatchItem } from './components/SceneScriptMatcherModal';
 import { 
   PlusIcon, 
   SparklesIcon, 
@@ -40,7 +41,10 @@ import {
   ArrowRightOnRectangleIcon,
   DocumentArrowUpIcon,
   UserGroupIcon,
-  FolderIcon
+  FolderIcon,
+  ArrowsRightLeftIcon,
+  ArrowUpIcon,
+  ArrowDownIcon
 } from '@heroicons/react/24/outline';
 
 const tourService = new TourService();
@@ -55,6 +59,7 @@ export default function App() {
   // Rendering State
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderStage, setRenderStage] = useState('');
+  const [isMatcherModalOpen, setIsMatcherModalOpen] = useState(false);
 
   // YouTube Publishing Modal State
   const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
@@ -608,6 +613,13 @@ export default function App() {
         const blob = await res.blob();
         const file = new File([blob], `scene-${i + 1}.mp4`, { type: blob.type || 'video/mp4' });
         const duration = await getVideoDuration(file).catch(() => scene.duration || 25);
+        const screenshotIndex = scene.screenshotIndex !== undefined 
+          ? scene.screenshotIndex 
+          : (input.screenshots.length > 0 ? (i % input.screenshots.length) : undefined);
+        const screenshot = (screenshotIndex !== undefined && input.screenshots[screenshotIndex])
+          ? input.screenshots[screenshotIndex]
+          : undefined;
+
         newClips.push({
           id: `scene-clip-${i}-${Date.now()}`,
           file,
@@ -615,7 +627,11 @@ export default function App() {
           duration: duration || scene.duration || 25,
           status: 'ready',
           narration: scene.narration,
-          audioUrl: scene.audioUrl
+          audioUrl: scene.audioUrl,
+          title: `Scene ${i + 1}: ${scene.visualPrompt || scene.timestamp || ''}`,
+          screenshotUrl: scene.screenshotUrl || scene.videoUrl,
+          rawScreenshot: screenshot,
+          videoUrl: scene.videoUrl
         });
       } catch (err) {
         console.warn("Could not convert scene to editor clip:", err);
@@ -625,12 +641,140 @@ export default function App() {
     if (newClips.length > 0) {
       setEditorState(prev => ({
         ...prev,
-        clips: [...prev.clips, ...newClips],
+        clips: prev.clips.length === 0 ? newClips : [...prev.clips, ...newClips],
         isRendered: false
       }));
       setActiveTab('editor');
     }
   };
+
+  const openMatcherFromCreator = async () => {
+    if (editorState.clips.length === 0 && state.scenes.length > 0) {
+      await sendScenesToEditor();
+    }
+    setIsMatcherModalOpen(true);
+  };
+
+  const moveClip = (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= editorState.clips.length) return;
+    setEditorState(prev => {
+      const next = [...prev.clips];
+      const temp = next[index];
+      next[index] = next[targetIndex];
+      next[targetIndex] = temp;
+      return { ...prev, clips: next, isRendered: false };
+    });
+  };
+
+  const moveCreatorScene = (index: number, direction: 'left' | 'right') => {
+    const targetIndex = direction === 'left' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= state.scenes.length) return;
+    setState(prev => {
+      const next = [...prev.scenes];
+      const temp = next[index];
+      next[index] = next[targetIndex];
+      next[targetIndex] = temp;
+      return { ...prev, scenes: next };
+    });
+  };
+
+  const swapCreatorSceneScripts = (idxA: number, idxB: number) => {
+    if (idxA === idxB || idxA < 0 || idxB < 0 || idxA >= state.scenes.length || idxB >= state.scenes.length) return;
+    setState(prev => {
+      const next = [...prev.scenes];
+      const scriptA = next[idxA].narration;
+      const audioA = next[idxA].audioUrl;
+      next[idxA] = { ...next[idxA], narration: next[idxB].narration, audioUrl: next[idxB].audioUrl };
+      next[idxB] = { ...next[idxB], narration: scriptA, audioUrl: audioA };
+      return { ...prev, scenes: next };
+    });
+  };
+
+  const handleConfirmMatchAndStitch = async (matchedItems: SceneMatchItem[]) => {
+    const updatedClips: EditorClip[] = matchedItems.map((item, idx) => ({
+      id: item.id || `scene-clip-${idx}-${Date.now()}`,
+      file: item.file,
+      previewUrl: item.previewUrl,
+      duration: item.duration || 25,
+      status: 'ready',
+      narration: item.narration,
+      audioUrl: item.audioUrl,
+      title: item.title || `Scene ${idx + 1}`,
+      screenshotUrl: item.screenshotUrl || item.previewUrl,
+      rawScreenshot: item.rawScreenshot,
+      videoUrl: item.videoUrl || item.previewUrl
+    }));
+
+    setEditorState(prev => ({
+      ...prev,
+      clips: updatedClips,
+      isRendered: false
+    }));
+
+    setIsMatcherModalOpen(false);
+    await handleRenderProject({ customClips: updatedClips });
+  };
+
+  const handleSaveMatchesToTimeline = (matchedItems: SceneMatchItem[]) => {
+    const updatedClips: EditorClip[] = matchedItems.map((item, idx) => ({
+      id: item.id || `scene-clip-${idx}-${Date.now()}`,
+      file: item.file,
+      previewUrl: item.previewUrl,
+      duration: item.duration || 25,
+      status: 'ready',
+      narration: item.narration,
+      audioUrl: item.audioUrl,
+      title: item.title || `Scene ${idx + 1}`,
+      screenshotUrl: item.screenshotUrl || item.previewUrl,
+      rawScreenshot: item.rawScreenshot,
+      videoUrl: item.videoUrl || item.previewUrl
+    }));
+
+    setEditorState(prev => ({
+      ...prev,
+      clips: updatedClips,
+      isRendered: false
+    }));
+  };
+
+  const handleGenerateVoiceover = async (text: string): Promise<string> => {
+    return await tourService.generateNarration(text);
+  };
+
+  const scenesForMatcher: SceneMatchItem[] = useMemo(() => {
+    if (editorState.clips.length > 0) {
+      return editorState.clips.map((clip, idx) => ({
+        id: clip.id,
+        title: clip.title || `Scene ${idx + 1}`,
+        previewUrl: clip.previewUrl,
+        duration: clip.duration,
+        narration: clip.narration || '',
+        audioUrl: clip.audioUrl,
+        screenshotUrl: clip.screenshotUrl || clip.previewUrl,
+        rawScreenshot: clip.rawScreenshot,
+        file: clip.file,
+        videoUrl: clip.videoUrl || clip.previewUrl
+      }));
+    }
+    return state.scenes.map((scene, idx) => {
+      const screenshotIndex = scene.screenshotIndex !== undefined 
+        ? scene.screenshotIndex 
+        : (input.screenshots.length > 0 ? (idx % input.screenshots.length) : undefined);
+      const screenshot = screenshotIndex !== undefined ? input.screenshots[screenshotIndex] : undefined;
+      return {
+        id: scene.id || `creator-scene-${idx}`,
+        title: `Scene ${idx + 1}: ${scene.visualPrompt || scene.timestamp || ''}`,
+        previewUrl: scene.videoUrl || screenshot || '',
+        duration: scene.duration || 25,
+        narration: scene.narration || '',
+        audioUrl: scene.audioUrl,
+        screenshotUrl: scene.screenshotUrl || scene.videoUrl,
+        rawScreenshot: screenshot,
+        videoUrl: scene.videoUrl
+      };
+    });
+  }, [editorState.clips, state.scenes, input.screenshots]);
 
   const reRenderScene = async (sceneIndex: number, motionStyle: any) => {
     const scene = state.scenes[sceneIndex];
@@ -665,19 +809,23 @@ export default function App() {
   };
 
   // --- Real Master Video Assembly & Stitching Engine ---
-  const handleRenderProject = async (options?: { autoOpenPreview?: boolean }): Promise<string | null> => {
-    if (!isDurationValid || editorState.clips.length === 0) return null;
+  const handleRenderProject = async (options?: { autoOpenPreview?: boolean; customClips?: EditorClip[] }): Promise<string | null> => {
+    const clipsToRender = options?.customClips && options.customClips.length > 0
+      ? options.customClips
+      : editorState.clips;
+
+    if (!isDurationValid || clipsToRender.length === 0) return null;
     setEditorState(prev => ({ ...prev, isRendering: true }));
     setRenderProgress(5);
-    setRenderStage('Initializing Master Assembly Engine...');
+    setRenderStage('Initializing Master Assembly Engine with Synchronized Audio...');
     
     try {
-      const totalClips = editorState.clips.length;
+      const totalClips = clipsToRender.length;
       const clipBlobs: Blob[] = [];
 
       // Step 1: Collect video streams for all timeline scenes
       for (let i = 0; i < totalClips; i++) {
-        const clip = editorState.clips[i];
+        const clip = clipsToRender[i];
         setRenderStage(`Preparing Scene ${i + 1} of ${totalClips}...`);
         setRenderProgress(10 + Math.floor(((i + 1) / totalClips) * 25));
         
@@ -757,6 +905,19 @@ export default function App() {
           else if (blob.type.includes('jpeg') || blob.type.includes('jpg')) ext = 'jpg';
           formData.append('clips', blob, `scene-${idx + 1}.${ext}`);
         });
+
+        // Attach matching synchronized audio track for each scene
+        clipsToRender.forEach((clip, idx) => {
+          if (clip.audioUrl) {
+            try {
+              const audioBlob = pcmBase64ToWavBlob(clip.audioUrl);
+              formData.append('audios', audioBlob, `scene-${idx + 1}.wav`);
+            } catch (aErr) {
+              console.warn(`Could not attach wav audio for scene ${idx + 1}:`, aErr);
+            }
+          }
+        });
+
         const title = editorState.youtubeMetadata?.title || 'TourGenie_Master_Tour';
         formData.append('title', title);
 
@@ -787,7 +948,7 @@ export default function App() {
         setRenderProgress(60);
 
         masterUrl = await stitchClipsClientSide(
-          editorState.clips.map(c => c.previewUrl),
+          clipsToRender.map(c => c.previewUrl),
           (stage, pct) => {
             setRenderStage(stage);
             setRenderProgress(60 + Math.floor(pct * 0.35));
@@ -795,13 +956,14 @@ export default function App() {
         );
       }
 
-      const finalMasterUrl = masterUrl || editorState.clips[0]?.previewUrl || null;
+      const finalMasterUrl = masterUrl || clipsToRender[0]?.previewUrl || null;
       setRenderProgress(100);
-      setRenderStage(`Export Successful! All ${totalClips} scenes stitched.`);
+      setRenderStage(`Export Successful! All ${totalClips} scenes stitched in perfect sequence.`);
 
       // Finalize editorState with the true master combinedVideoUrl
       setEditorState(prev => ({
         ...prev,
+        clips: clipsToRender,
         isRendering: false,
         isRendered: true,
         combinedVideoUrl: finalMasterUrl || undefined
@@ -1371,7 +1533,13 @@ export default function App() {
                     </div>
                     <p className="text-slate-500 text-sm">Download individual scene MP4s and voiceovers, or open all scenes directly in the Video Editor.</p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={openMatcherFromCreator}
+                      className="bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-bold py-3 px-4 rounded-xl text-sm transition flex items-center gap-2 shadow-sm active:scale-95"
+                    >
+                      <ArrowsRightLeftIcon className="w-4 h-4 text-indigo-600" /> Match Scenes with Scripts ({state.scenes.length})
+                    </button>
                     <button
                       onClick={sendScenesToEditor}
                       className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-5 rounded-xl shadow-lg shadow-indigo-100 flex items-center gap-2 text-sm transition active:scale-95"
@@ -1409,12 +1577,31 @@ export default function App() {
                           ) : (
                             <div className="text-slate-400 text-xs">No video generated</div>
                           )}
+                          <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] text-white font-bold">
+                            Scene {idx + 1} of {state.scenes.length}
+                          </div>
                         </div>
                         <div className="p-6">
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-bold text-indigo-600 uppercase tracking-wider">Scene {idx + 1}</span>
                             <div className="flex items-center gap-1.5">
-                              <span className="text-[11px] font-semibold text-slate-400">{scene.timestamp || '0:00'}</span>
+                              <button 
+                                disabled={idx === 0}
+                                onClick={() => moveCreatorScene(idx, 'left')}
+                                className="p-1 rounded-md hover:bg-slate-100 text-slate-500 disabled:opacity-20 disabled:hover:bg-transparent"
+                                title="Move Earlier"
+                              >
+                                <ArrowUpIcon className="w-3.5 h-3.5 -rotate-90" />
+                              </button>
+                              <button 
+                                disabled={idx === state.scenes.length - 1}
+                                onClick={() => moveCreatorScene(idx, 'right')}
+                                className="p-1 rounded-md hover:bg-slate-100 text-slate-500 disabled:opacity-20 disabled:hover:bg-transparent"
+                                title="Move Later"
+                              >
+                                <ArrowDownIcon className="w-3.5 h-3.5 -rotate-90" />
+                              </button>
+                              <span className="text-[11px] font-semibold text-slate-400 ml-1">{scene.timestamp || '0:00'}</span>
                               {scene.duration && (
                                 <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
                                   {scene.duration}s
@@ -1635,8 +1822,25 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                        <div>
+                          <h4 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                            <FilmIcon className="w-5 h-5 text-indigo-600" />
+                            Sequence Timeline ({editorState.clips.length} Scenes)
+                          </h4>
+                          <p className="text-xs text-slate-500">Ensure each scene visual is matched with the exact spoken script before stitching.</p>
+                        </div>
+                        <button
+                          onClick={() => setIsMatcherModalOpen(true)}
+                          className="self-start sm:self-auto bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-3.5 py-2 rounded-xl text-xs transition flex items-center gap-2 border border-indigo-200 shadow-sm active:scale-95"
+                        >
+                          <ArrowsRightLeftIcon className="w-4 h-4 text-indigo-600" />
+                          Match Scenes with Scripts
+                        </button>
+                      </div>
+
                       {editorState.clips.map((clip, idx) => (
-                        <div key={clip.id} className="group relative bg-slate-50 border border-slate-100 rounded-2xl p-4 flex flex-col sm:flex-row gap-5 items-start transition hover:border-indigo-200 hover:bg-white hover:shadow-md">
+                        <div key={clip.id} className="group relative bg-slate-50 border border-slate-200/80 rounded-2xl p-4 flex flex-col sm:flex-row gap-5 items-start transition hover:border-indigo-300 hover:bg-white hover:shadow-md">
                           <div className="w-full sm:w-56 aspect-video rounded-xl overflow-hidden bg-black flex-shrink-0 relative shadow-inner">
                             {clip.previewUrl && (clip.previewUrl.startsWith('data:image') || clip.previewUrl.endsWith('.png') || clip.previewUrl.endsWith('.jpg') || clip.previewUrl.endsWith('.jpeg') || clip.previewUrl.endsWith('.webp')) ? (
                               <img src={clip.previewUrl} alt={clip.title || `Slide ${idx + 1}`} className="w-full h-full object-contain" />
@@ -1646,24 +1850,70 @@ export default function App() {
                             <div className="absolute top-2 right-2 bg-black/60 px-2 py-0.5 rounded-lg text-[10px] text-white font-bold backdrop-blur-sm">
                                 {Math.floor(clip.duration)}s
                             </div>
+                            <div className="absolute bottom-2 left-2 bg-indigo-600/90 px-2 py-0.5 rounded-lg text-[10px] text-white font-bold backdrop-blur-sm">
+                              #{idx + 1}
+                            </div>
                           </div>
                           <div className="flex-1 w-full space-y-3 pt-1">
                             <div className="flex justify-between items-center">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Sequence Segment {idx + 1}</span>
-                              <button onClick={() => removeClip(clip.id)} className="text-slate-300 hover:text-red-500 transition-colors p-1"><TrashIcon className="w-5 h-5" /></button>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-800 uppercase tracking-wide">Scene {idx + 1}</span>
+                                {clip.title && <span className="text-xs text-slate-400 font-normal truncate max-w-xs">— {clip.title}</span>}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button 
+                                  disabled={idx === 0}
+                                  onClick={() => moveClip(idx, 'up')}
+                                  className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 disabled:opacity-30 disabled:hover:bg-transparent transition"
+                                  title="Move Earlier in Timeline"
+                                >
+                                  <ArrowUpIcon className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  disabled={idx === editorState.clips.length - 1}
+                                  onClick={() => moveClip(idx, 'down')}
+                                  className="p-1.5 rounded-lg hover:bg-slate-200 text-slate-500 disabled:opacity-30 disabled:hover:bg-transparent transition"
+                                  title="Move Later in Timeline"
+                                >
+                                  <ArrowDownIcon className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => removeClip(clip.id)} className="text-slate-400 hover:text-red-500 transition-colors p-1.5 ml-1" title="Remove Scene">
+                                  <TrashIcon className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
-                            {clip.status === 'analyzing' ? (
-                               <div className="flex items-center gap-2 text-indigo-600 animate-pulse text-sm font-medium">
-                                 <ArrowPathIcon className="w-4 h-4 animate-spin" /> Analyzing frame data...
-                               </div>
-                            ) : 
-                             clip.narration ? (
-                               <div className="bg-white border border-slate-100 rounded-xl p-3 space-y-1 shadow-sm">
-                                 <p className="text-[9px] text-indigo-500 font-bold uppercase tracking-tighter">AI Narration Generated</p>
-                                 <p className="text-sm text-slate-700 italic leading-snug">"{clip.narration}"</p>
-                               </div>
-                             ) : 
-                             <p className="text-sm text-slate-400 flex items-center gap-2"><SparklesIcon className="w-4 h-4" /> Ready for AI story analysis.</p>}
+
+                            {/* Narration Script section with inline edit and voiceover audition */}
+                            <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2 shadow-sm">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-1">
+                                  <MicrophoneIcon className="w-3.5 h-3.5 text-indigo-500" />
+                                  Narration Script
+                                </span>
+                                {clip.audioUrl && (
+                                  <button
+                                    onClick={() => playAudioPreview(clip.audioUrl, clip.narration)}
+                                    className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-md transition"
+                                  >
+                                    <SpeakerWaveIcon className="w-3 h-3" /> Audition Voiceover
+                                  </button>
+                                )}
+                              </div>
+                              <textarea
+                                value={clip.narration || ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setEditorState(prev => {
+                                    const next = [...prev.clips];
+                                    next[idx] = { ...next[idx], narration: val };
+                                    return { ...prev, clips: next, isRendered: false };
+                                  });
+                                }}
+                                placeholder="Enter narration script for this scene..."
+                                rows={2}
+                                className="w-full text-xs text-slate-700 leading-relaxed border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none bg-slate-50/50"
+                              />
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -1732,14 +1982,24 @@ export default function App() {
 
                       <div className="space-y-4">
                         {isDurationValid && !editorState.isRendered && (
-                          <button 
-                            onClick={handleRenderProject} 
-                            disabled={editorState.isRendering}
-                            className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 shadow-2xl bg-indigo-600 hover:bg-indigo-500 text-white ${editorState.isRendering ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}`}
-                          >
-                            <CpuChipIcon className={`w-6 h-6 ${editorState.isRendering ? 'animate-spin' : ''}`} />
-                            {editorState.isRendering ? `Stitching ${editorState.clips.length} Scenes...` : `Render Master Project (Stitch All ${editorState.clips.length} Scenes)`}
-                          </button>
+                          <div className="space-y-2.5">
+                            <button 
+                              onClick={() => setIsMatcherModalOpen(true)} 
+                              disabled={editorState.isRendering}
+                              className={`w-full py-4 px-4 rounded-2xl font-black text-sm uppercase tracking-wider transition-all duration-300 flex items-center justify-center gap-2.5 shadow-2xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white active:scale-95`}
+                            >
+                              <ArrowsRightLeftIcon className="w-5 h-5 text-indigo-200" />
+                              Match Scenes with Scripts & Stitch
+                            </button>
+                            <button
+                              onClick={() => handleRenderProject()}
+                              disabled={editorState.isRendering}
+                              className={`w-full py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 ${editorState.isRendering ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}`}
+                            >
+                              <CpuChipIcon className={`w-4 h-4 ${editorState.isRendering ? 'animate-spin' : ''}`} />
+                              {editorState.isRendering ? `Stitching ${editorState.clips.length} Scenes...` : `Direct Stitch All ${editorState.clips.length} Scenes`}
+                            </button>
+                          </div>
                         )}
 
                         <button 
@@ -1788,13 +2048,22 @@ export default function App() {
                               <ArrowDownTrayIcon className="w-5 h-5" /> Download Master File (All {editorState.clips.length} Scenes MP4)
                             </a>
 
-                            <button
-                              onClick={handleRenderProject}
-                              disabled={editorState.isRendering}
-                              className="w-full bg-white/5 hover:bg-white/10 py-2.5 rounded-xl font-semibold text-xs tracking-wide transition flex items-center justify-center gap-2 border border-white/10 text-slate-300 active:scale-95"
-                            >
-                              <ArrowPathIcon className={`w-4 h-4 ${editorState.isRendering ? 'animate-spin' : ''}`} /> Re-Stitch / Update Master Video
-                            </button>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => setIsMatcherModalOpen(true)}
+                                disabled={editorState.isRendering}
+                                className="w-full bg-indigo-600/30 hover:bg-indigo-600/50 py-2.5 rounded-xl font-semibold text-xs tracking-wide transition flex items-center justify-center gap-1.5 border border-indigo-400/30 text-indigo-200 active:scale-95"
+                              >
+                                <ArrowsRightLeftIcon className="w-3.5 h-3.5 text-indigo-400" /> Re-Match Scenes
+                              </button>
+                              <button
+                                onClick={() => handleRenderProject()}
+                                disabled={editorState.isRendering}
+                                className="w-full bg-white/5 hover:bg-white/10 py-2.5 rounded-xl font-semibold text-xs tracking-wide transition flex items-center justify-center gap-1.5 border border-white/10 text-slate-300 active:scale-95"
+                              >
+                                <ArrowPathIcon className={`w-3.5 h-3.5 ${editorState.isRendering ? 'animate-spin' : ''}`} /> Quick Re-Stitch
+                              </button>
+                            </div>
                           </div>
                         )}
 
@@ -2211,6 +2480,19 @@ export default function App() {
           setUploadedMasterFile(file);
           setEditorState(prev => ({ ...prev, combinedVideoUrl: url, isRendered: true }));
         }}
+      />
+
+      {/* SCENE & SCRIPT MATCHER MODAL */}
+      <SceneScriptMatcherModal
+        isOpen={isMatcherModalOpen}
+        onClose={() => setIsMatcherModalOpen(false)}
+        scenes={scenesForMatcher}
+        onConfirmAndStitch={handleConfirmMatchAndStitch}
+        onSaveToTimeline={handleSaveMatchesToTimeline}
+        onGenerateVoiceover={handleGenerateVoiceover}
+        isStitching={editorState.isRendering}
+        renderStage={renderStage}
+        renderProgress={renderProgress}
       />
 
       <footer className="fixed bottom-6 left-6 z-[60] flex gap-3">
