@@ -39,7 +39,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   if (!isOpen) return null;
 
   const currentHostname = typeof window !== "undefined" ? window.location.hostname : "";
-  const projectId = firebaseConfig.projectId || "gen-lang-client-0034495083";
+  const projectId = firebaseConfig.projectId || "gen-lang-client-0102282465";
   const firebaseSettingsUrl = `https://console.firebase.google.com/project/${projectId}/authentication/settings`;
 
   const handleCopyDomain = () => {
@@ -64,6 +64,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
       if (isUnauthorizedDomain) {
         setUnauthorizedDomain(currentHostname || "this domain");
+      } else if (err.code === "auth/invalid-continue-uri" || (err.message && err.message.includes("invalid-continue-uri"))) {
+        setUnauthorizedDomain(currentHostname || "this domain");
+        setError("Firebase configuration mismatch (auth/invalid-continue-uri). The authentication domain must be authorized in Firebase Console.");
       } else if (err.code === "auth/popup-blocked") {
         setError("Popup was blocked by browser. Please allow popups or use Google Login ID / PW below.");
       } else if (err.code === "auth/popup-closed-by-user") {

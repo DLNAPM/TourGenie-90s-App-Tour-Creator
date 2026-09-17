@@ -30,12 +30,12 @@ import {
 import firebaseConfig from "../firebase-applet-config.json";
 import { compressImageForStorage } from "./imageOptimizer";
 
-// Ensure Google Authentication and Firestore always use gen-lang-client-0034495083
+// Ensure Google Authentication and Firestore use the authorized Firebase project configuration
 export const effectiveFirebaseConfig = {
   ...firebaseConfig,
-  projectId: "gen-lang-client-0034495083",
-  authDomain: "gen-lang-client-0034495083.firebaseapp.com",
-  storageBucket: "gen-lang-client-0034495083.firebasestorage.app"
+  projectId: firebaseConfig.projectId || "gen-lang-client-0102282465",
+  authDomain: firebaseConfig.authDomain || "gen-lang-client-0102282465.firebaseapp.com",
+  storageBucket: firebaseConfig.storageBucket || "gen-lang-client-0102282465.firebasestorage.app"
 };
 
 // Initialize Firebase
@@ -48,10 +48,15 @@ export const db = dbId
   ? getFirestore(app, dbId)
   : getFirestore(app);
 
-const googleProvider = new GoogleAuthProvider();
-googleProvider.addScope("https://www.googleapis.com/auth/youtube.upload");
-googleProvider.addScope("https://www.googleapis.com/auth/youtube.readonly");
+// Standard Google Auth Provider for User Login
+export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
+
+// Dedicated YouTube Auth Provider for YouTube Publishing flow
+export const youtubeAuthProvider = new GoogleAuthProvider();
+youtubeAuthProvider.addScope("https://www.googleapis.com/auth/youtube.upload");
+youtubeAuthProvider.addScope("https://www.googleapis.com/auth/youtube.readonly");
+youtubeAuthProvider.setCustomParameters({ prompt: "select_account" });
 
 // Error handling conforming to Firebase Integration Skill
 export enum OperationType {
@@ -278,7 +283,7 @@ export async function loginWithGoogle(): Promise<User> {
 }
 
 export async function authorizeYouTubeChannel(): Promise<{ user: User; accessToken: string }> {
-  const result = await signInWithPopup(auth, googleProvider);
+  const result = await signInWithPopup(auth, youtubeAuthProvider);
   const credential = GoogleAuthProvider.credentialFromResult(result);
   const accessToken = credential?.accessToken;
   if (!accessToken) {
