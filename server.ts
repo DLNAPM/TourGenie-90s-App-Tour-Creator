@@ -43,6 +43,72 @@ async function startServer() {
     res.json({ hasKey: Boolean(key) });
   });
 
+  // --- Tour Session Store (Persistent Hybrid Fallback) ---
+  const SESSIONS_DIR = path.join(process.cwd(), "sessions_data");
+  if (!fs.existsSync(SESSIONS_DIR)) {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+  }
+
+  app.get("/api/sessions", (_req, res) => {
+    try {
+      const files = fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith(".json"));
+      const sessions = [];
+      for (const f of files) {
+        try {
+          const content = fs.readFileSync(path.join(SESSIONS_DIR, f), "utf8");
+          sessions.push(JSON.parse(content));
+        } catch {}
+      }
+      res.json({ sessions });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/sessions/:id", (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const safeId = sessionId.replace(/[^a-zA-Z0-9_\-]/g, "");
+      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, "utf8");
+        return res.json(JSON.parse(content));
+      }
+      return res.status(404).json({ error: "Session not found on server store" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/sessions", (req, res) => {
+    try {
+      const session = req.body;
+      if (!session || !session.id) {
+        return res.status(400).json({ error: "Invalid session payload" });
+      }
+      const safeId = String(session.id).replace(/[^a-zA-Z0-9_\-]/g, "");
+      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(session, null, 2), "utf8");
+      res.json({ success: true, id: session.id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/sessions/:id", (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const safeId = sessionId.replace(/[^a-zA-Z0-9_\-]/g, "");
+      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // 1. Generate Storyboards
   app.post("/api/generate-storyboard", async (req, res) => {
     try {

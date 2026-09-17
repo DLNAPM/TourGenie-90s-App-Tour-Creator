@@ -36,7 +36,8 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   CheckIcon,
-  ArrowUpTrayIcon
+  ArrowUpTrayIcon,
+  ArrowDownTrayIcon
 } from "@heroicons/react/24/outline";
 
 interface SavedSessionsModalProps {
@@ -296,15 +297,52 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
     try {
       const session = await getSessionById(cleanCode);
       if (!session) {
-        setImportError("Session not found. Please verify the Session ID code or link.");
+        setImportError(`Session "${cleanCode}" was not found in cloud, local, or server project storage. If this session was created on another device while offline, you can import it using "Upload .tourgenie" file.`);
         return;
       }
       onLoadSession(session);
       onClose();
     } catch (err: any) {
-      setImportError(err.message || "Failed to import session.");
+      let friendlyMsg = "Failed to import session.";
+      const raw = err?.message || String(err);
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error) {
+          if (parsed.error.includes("client is offline") || parsed.error.includes("offline")) {
+            friendlyMsg = `The cloud database is currently unreachable or offline. Please check your network or import the project file (.tourgenie) directly.`;
+          } else {
+            friendlyMsg = parsed.error;
+          }
+        } else {
+          friendlyMsg = raw;
+        }
+      } catch {
+        if (raw.includes("client is offline") || raw.includes("offline")) {
+          friendlyMsg = `The cloud database is currently unreachable or offline. Please check your network or import the project file (.tourgenie) directly.`;
+        } else {
+          friendlyMsg = raw;
+        }
+      }
+      setImportError(friendlyMsg);
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleExportSession = (session: SavedProjectSession) => {
+    try {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(session, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      const safeTitle = (session.sessionName || session.title || "tour_project").toLowerCase().replace(/[^a-z0-9]/g, "_");
+      downloadAnchor.setAttribute("download", `${safeTitle}_${session.id || 'export'}.tourgenie`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      setStatusNotice(`Exported "${session.sessionName || session.title}" as .tourgenie file!`);
+      setTimeout(() => setStatusNotice(null), 4000);
+    } catch (err: any) {
+      setImportError("Failed to export session file: " + (err.message || String(err)));
     }
   };
 
@@ -531,6 +569,15 @@ export const SavedSessionsModal: React.FC<SavedSessionsModalProps> = ({
                   Share
                 </button>
               )}
+
+              {/* Export as .tourgenie file */}
+              <button
+                onClick={() => handleExportSession({ ...s, id: safeId })}
+                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-slate-700 rounded-xl transition"
+                title="Export session as .tourgenie JSON file"
+              >
+                <ArrowDownTrayIcon className="w-4 h-4" />
+              </button>
 
               {/* Duplicate / Save Copy button for non-owner */}
               {!isOwner && (

@@ -12,6 +12,7 @@ import {
 } from "firebase/auth";
 import { 
   getFirestore, 
+  initializeFirestore,
   doc, 
   setDoc, 
   getDoc, 
@@ -42,11 +43,19 @@ export const effectiveFirebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(effectiveFirebaseConfig) : getApp();
 export const auth = getAuth(app);
 
-// Use the designated Firestore Database ID
+// Use the designated Firestore Database ID and enforce long-polling transport for iframe sandbox reliability
 const dbId = (firebaseConfig as any).firestoreDatabaseId;
-export const db = dbId 
-  ? getFirestore(app, dbId)
-  : getFirestore(app);
+let dbInstance;
+try {
+  dbInstance = initializeFirestore(app, {
+    experimentalForceLongPolling: true,
+  }, dbId || undefined);
+} catch {
+  dbInstance = dbId 
+    ? getFirestore(app, dbId)
+    : getFirestore(app);
+}
+export const db = dbInstance;
 
 // Standard Google Auth Provider for User Login
 export const googleProvider = new GoogleAuthProvider();
@@ -550,6 +559,15 @@ export async function saveUserSession(
   // Always save to local storage first (instant, 100% resilient)
   saveLocalSession(cleanSessionData);
 
+  // Sync to server store for seamless cross-client and offline backup
+  try {
+    fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cleanSessionData)
+    }).catch(() => {});
+  } catch {}
+
   // If cloud write quota was previously reached today, preserve locally and return without stalling write streams
   if (getCloudQuotaExceeded()) {
     console.warn(`[TourGenie] Cloud quota reached today. Session ${sessionId} safely stored locally.`);
@@ -606,9 +624,11 @@ export async function saveUserSession(
 
     return sessionId;
   } catch (error) {
-    if (isQuotaError(error)) {
-      setCloudQuotaExceeded(true);
-      console.warn(`[TourGenie] Cloud write quota exceeded. Session ${sessionId} safely preserved in local storage.`);
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const isOffline = rawMsg.includes("client is offline") || rawMsg.includes("offline");
+    if (isQuotaError(error) || isOffline) {
+      if (isQuotaError(error)) setCloudQuotaExceeded(true);
+      console.warn(`[TourGenie] Cloud database unavailable or offline (${rawMsg}). Session ${sessionId} safely preserved in local and server storage.`);
       return sessionId; // Do not crash the application!
     }
     handleFirestoreError(error, OperationType.WRITE, `sessions/${sessionId}`);
@@ -630,7 +650,24 @@ export async function getUserSessions(userId: string): Promise<SavedProjectSessi
     console.warn("Could not read local sessions:", e);
   }
 
-  // 2. Fetch from Firestore if available
+  // 2. Fetch from Server session store (resilient multi-client sync)
+  try {
+    const res = await fetch("/api/sessions");
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.sessions)) {
+        data.sessions.forEach((s: SavedProjectSession) => {
+          if (!s.userId || s.userId === userId || s.userId.startsWith('guest_') || userId.startsWith('guest_') || s.isPublic) {
+            sessionsMap.set(s.id, s);
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("Could not read server sessions:", e);
+  }
+
+  // 3. Fetch from Firestore if available
   try {
     const globalCol = collection(db, "sessions");
     const q = query(globalCol, where("userId", "==", userId));
@@ -644,9 +681,11 @@ export async function getUserSessions(userId: string): Promise<SavedProjectSessi
       });
     });
   } catch (error) {
-    if (isQuotaError(error)) {
-      setCloudQuotaExceeded(true);
-      console.warn("Firestore query throttled by quota; returning local sessions.");
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const isOffline = rawMsg.includes("client is offline") || rawMsg.includes("offline");
+    if (isQuotaError(error) || isOffline) {
+      if (isQuotaError(error)) setCloudQuotaExceeded(true);
+      console.warn(`[TourGenie] Firestore offline or throttled (${rawMsg}); returning local & server sessions.`);
     } else {
       console.warn("Could not query Firestore sessions:", error);
     }
@@ -677,6 +716,11 @@ export async function getSharedWithMeSessions(userEmail: string): Promise<SavedP
     });
     return sessions;
   } catch (error) {
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    if (rawMsg.includes("client is offline") || rawMsg.includes("offline")) {
+      console.warn("[TourGenie] Shared sessions check skipped while offline.");
+      return [];
+    }
     handleFirestoreError(error, OperationType.LIST, `sessions?sharedWithEmails=${userEmail}`);
   }
 }
@@ -696,17 +740,37 @@ export async function getPublicSessions(): Promise<SavedProjectSession[]> {
     });
     return sessions;
   } catch (error) {
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    if (rawMsg.includes("client is offline") || rawMsg.includes("offline")) {
+      console.warn("[TourGenie] Public sessions check skipped while offline.");
+      return [];
+    }
     handleFirestoreError(error, OperationType.LIST, 'sessions?isPublic=true');
   }
 }
 
 export async function getSessionById(sessionId: string): Promise<SavedProjectSession | null> {
-  // Check local cache first
+  // 1. Check local cache first (instant)
   const local = getLocalSessionById(sessionId);
   if (local) {
     return local;
   }
 
+  // 2. Check server session store (resilient cross-client backend fallback)
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    if (res.ok) {
+      const serverData = await res.json();
+      if (serverData && serverData.id) {
+        saveLocalSession(serverData);
+        return serverData;
+      }
+    }
+  } catch (serverErr) {
+    console.warn("[TourGenie] Server sessions lookup failed, trying Firestore:", serverErr);
+  }
+
+  // 3. Check Firestore cloud
   try {
     const sessionRef = doc(db, "sessions", sessionId);
     const snap = await getDoc(sessionRef);
@@ -750,8 +814,11 @@ export async function getSessionById(sessionId: string): Promise<SavedProjectSes
     }
     return null;
   } catch (error) {
-    if (isQuotaError(error)) {
-      setCloudQuotaExceeded(true);
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    const isOffline = rawMsg.includes("client is offline") || rawMsg.includes("offline");
+    if (isQuotaError(error) || isOffline) {
+      if (isQuotaError(error)) setCloudQuotaExceeded(true);
+      console.warn(`[TourGenie] Firestore offline or throttled (${rawMsg}) while fetching session ${sessionId}`);
       return local || null;
     }
     handleFirestoreError(error, OperationType.GET, `sessions/${sessionId}`);
@@ -918,14 +985,19 @@ export async function deleteUserSession(userId: string, sessionId: string): Prom
   // Always remove locally first
   removeLocalSession(sessionId);
 
+  // Remove from server store
+  try {
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {});
+  } catch {}
+
   if (getCloudQuotaExceeded()) return;
 
   try {
     const globalSessionRef = doc(db, "sessions", sessionId);
     await deleteDoc(globalSessionRef);
   } catch (error) {
-    if (isQuotaError(error)) {
-      setCloudQuotaExceeded(true);
+    const rawMsg = error instanceof Error ? error.message : String(error);
+    if (isQuotaError(error) || rawMsg.includes("client is offline") || rawMsg.includes("offline")) {
       return;
     }
     handleFirestoreError(error, OperationType.DELETE, `sessions/${sessionId}`);
@@ -939,6 +1011,18 @@ export async function updateSessionOrganization(
 ): Promise<void> {
   // Update local session
   updateLocalSession(sessionId, updates);
+
+  // Update server session if available
+  try {
+    const local = getLocalSessionById(sessionId);
+    if (local) {
+      fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(local)
+      }).catch(() => {});
+    }
+  } catch {}
 
   if (getCloudQuotaExceeded()) return;
 
