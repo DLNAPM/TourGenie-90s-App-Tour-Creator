@@ -345,15 +345,59 @@ async function startServer() {
         return res.status(400).json({ error: "Video generation is not completed yet" });
       }
 
-      const uri = updated.response?.generatedVideos?.[0]?.video?.uri;
+      // 1. Check if raw videoBytes were returned in response
+      const videoObj = updated.response?.generatedVideos?.[0]?.video;
+      if (videoObj?.videoBytes) {
+        res.setHeader("Content-Type", "video/mp4");
+        res.setHeader("Content-Disposition", "inline; filename=scene.mp4");
+        return res.send(Buffer.from(videoObj.videoBytes, "base64"));
+      }
+
+      const uri = videoObj?.uri;
       if (!uri) {
         return res.status(404).json({ error: "No video download URI found in completed operation" });
       }
 
-      // Fetch video using x-goog-api-key header - API key is never passed in the URL
-      const videoRes = await fetch(uri, {
+      // 2. Try SDK ai.files.download to temp file first
+      const tempFilePath = path.join(os.tmpdir(), `veo_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
+      try {
+        await ai.files.download({ file: uri, downloadPath: tempFilePath });
+        if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 1000) {
+          res.setHeader("Content-Type", "video/mp4");
+          res.setHeader("Content-Disposition", "inline; filename=scene.mp4");
+          const stream = fs.createReadStream(tempFilePath);
+          stream.on("close", () => {
+            fs.unlink(tempFilePath, () => {});
+          });
+          return stream.pipe(res);
+        }
+      } catch (sdkErr: any) {
+        console.warn("ai.files.download attempt failed, trying direct HTTP fetch:", sdkErr?.message);
+        if (fs.existsSync(tempFilePath)) {
+          try { fs.unlinkSync(tempFilePath); } catch {}
+        }
+      }
+
+      // 3. Construct the media download URL with :download?alt=media
+      let downloadUrl = uri;
+      if (!downloadUrl.startsWith("http")) {
+        downloadUrl = `https://generativelanguage.googleapis.com/v1beta/${downloadUrl}`;
+      }
+      if (!downloadUrl.includes(":download")) {
+        downloadUrl = `${downloadUrl}:download?alt=media`;
+      } else if (!downloadUrl.includes("alt=media")) {
+        downloadUrl += (downloadUrl.includes("?") ? "&" : "?") + "alt=media";
+      }
+
+      let videoRes = await fetch(downloadUrl, {
         headers: { 'x-goog-api-key': apiKey }
       });
+
+      if (!videoRes.ok) {
+        // Fallback to passing key as query param if header rejected
+        const urlWithKey = downloadUrl + (downloadUrl.includes("?") ? "&" : "?") + `key=${encodeURIComponent(apiKey)}`;
+        videoRes = await fetch(urlWithKey);
+      }
 
       if (!videoRes.ok) {
         const errText = await videoRes.text();
@@ -390,7 +434,7 @@ async function startServer() {
       let response;
       try {
         response = await ai.models.generateContent({
-          model: "gemini-3.1-flash-tts-preview",
+          model: "gemini-3.8-flash-lite-tts",
           contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
           config: {
             responseModalities: [Modality.AUDIO],
@@ -401,20 +445,34 @@ async function startServer() {
             },
           },
         });
-      } catch (e) {
-        // Fallback to gemini-2.5-flash-preview-tts if 3.1 tts is not yet available in current region
-        response = await ai.models.generateContent({
-          model: "gemini-2.5-flash-preview-tts",
-          contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
-          config: {
-            responseModalities: [Modality.AUDIO],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: 'Kore' },
+      } catch (e1) {
+        try {
+          response = await ai.models.generateContent({
+            model: "gemini-3.8-flash-tts",
+            contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
+            config: {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: 'Kore' },
+                },
               },
             },
-          },
-        });
+          });
+        } catch (e2) {
+          response = await ai.models.generateContent({
+            model: "gemini-2.5-flash-preview-tts",
+            contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
+            config: {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: 'Kore' },
+                },
+              },
+            },
+          });
+        }
       }
 
       const rawBase64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
