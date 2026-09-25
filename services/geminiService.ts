@@ -132,9 +132,11 @@ export class TourService {
       motionStyle?: 'push-in' | 'pan-horizontal' | 'pan-vertical' | 'spotlight' | 'pull-out' | 'auto';
       sceneIndex?: number;
       duration?: number;
+      narrationStartOffset?: number;
     }
   ): Promise<string> {
     const effectiveDuration = Math.max(30, options?.duration || scene.duration || 30);
+    const effectiveStartOffset = Math.max(0, options?.narrationStartOffset ?? scene.narrationStartOffset ?? 0);
     const engineMode = options?.engineMode || (screenshot ? 'studio' : 'veo');
     const effectiveScreenshot = screenshot || createSceneFallbackCanvas(scene.visualPrompt || scene.timestamp || 'Product Tour', scene.narration);
 
@@ -148,7 +150,8 @@ export class TourService {
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
           narration: scene.narration,
           audioBase64: options?.audioBase64,
-          motionStyle: options?.motionStyle || 'auto'
+          motionStyle: options?.motionStyle || 'auto',
+          narrationStartOffset: effectiveStartOffset
         });
         if (videoUrl) {
           return videoUrl;
@@ -277,7 +280,8 @@ export class TourService {
         operationName,
         targetDuration: effectiveDuration,
         audioBase64: options?.audioBase64,
-        narration: scene.narration
+        narration: scene.narration,
+        narrationStartOffset: effectiveStartOffset
       })
     });
 

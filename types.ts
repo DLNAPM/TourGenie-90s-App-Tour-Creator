@@ -17,6 +17,8 @@ export interface Scene {
   audioUrl?: string;
   status: 'pending' | 'generating' | 'completed' | 'failed';
   screenshotIndex?: number;
+  useVoiceover?: boolean;
+  narrationStartOffset?: number;
 }
 
 export interface GenerationState {
@@ -41,6 +43,8 @@ export interface EditorClip {
   screenshotUrl?: string;
   rawScreenshot?: string;
   videoUrl?: string;
+  useVoiceover?: boolean;
+  narrationStartOffset?: number;
 }
 
 export interface SavedProjectSession {

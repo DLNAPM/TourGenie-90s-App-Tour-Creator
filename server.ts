@@ -359,7 +359,8 @@ async function startServer() {
   async function extendVideoBufferToDuration(
     videoBuffer: Buffer,
     targetDurationSec: number = 30,
-    audioBase64?: string
+    audioBase64?: string,
+    narrationStartOffset: number = 0
   ): Promise<Buffer> {
     const sessionDir = path.join(os.tmpdir(), `fit-duration-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     fs.mkdirSync(sessionDir, { recursive: true });
@@ -384,14 +385,15 @@ async function startServer() {
       }
 
       let minTarget = Math.max(30, Number(targetDurationSec) || 30);
+      const delayMs = Math.max(0, Math.round(Number(narrationStartOffset || 0) * 1000));
 
-      // If audio is provided, probe audio duration to ensure video is at least as long as audio
+      // If audio is provided, probe audio duration to ensure video is at least as long as audio + delay
       if (audioPath) {
         try {
           const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`);
           const probed = parseFloat(stdout.trim());
           if (!isNaN(probed) && probed > 0) {
-            minTarget = Math.max(minTarget, Math.ceil(probed));
+            minTarget = Math.max(minTarget, Math.ceil(probed + (delayMs / 1000)));
           }
         } catch (probeErr) {
           console.warn("[Video Extender] Could not probe audio duration:", probeErr);
@@ -413,15 +415,18 @@ async function startServer() {
         return videoBuffer;
       }
 
-      console.log(`[Video Extender] Extending ${rawDuration.toFixed(1)}s video to fit tour script (${minTarget}s) with audio: ${Boolean(audioPath)}`);
+      console.log(`[Video Extender] Extending ${rawDuration.toFixed(1)}s video to fit tour script (${minTarget}s) with audio: ${Boolean(audioPath)} delay: ${delayMs}ms`);
 
       let cmd = '';
       if (audioPath) {
-        // Loop video smoothly until narration audio finishes, muxing audio directly into the MP4
-        cmd = `ffmpeg -y -stream_loop -1 -i "${rawVideoPath}" -i "${audioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -shortest "${outVideoPath}"`;
+        const audioFilter = delayMs > 0
+          ? `adelay=delays=${delayMs}:all=1,apad=whole_dur=${minTarget}`
+          : `apad=whole_dur=${minTarget}`;
+        // Loop video smoothly, apply narration start offset delay, and pad with silence up to minTarget (at least 30s)
+        cmd = `ffmpeg -y -stream_loop -1 -i "${rawVideoPath}" -i "${audioPath}" -filter_complex "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v];[1:a]${audioFilter}[a]" -map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -t ${minTarget} "${outVideoPath}"`;
       } else {
-        // Loop video smoothly until target duration is met
-        cmd = `ffmpeg -y -stream_loop -1 -i "${rawVideoPath}" -t ${minTarget} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p "${outVideoPath}"`;
+        // Loop video smoothly to at least 30s with clean silent stereo audio track
+        cmd = `ffmpeg -y -stream_loop -1 -i "${rawVideoPath}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t ${minTarget} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -map 0:v:0 -map 1:a:0 "${outVideoPath}"`;
       }
 
       await execAsync(cmd);
@@ -540,7 +545,8 @@ async function startServer() {
 
       const arrayBuffer = await videoRes.arrayBuffer();
       const rawBuffer = Buffer.from(arrayBuffer);
-      const finalBuffer = await extendVideoBufferToDuration(rawBuffer, desiredDuration, audioBase64);
+      const narrationStartOffset = Math.max(0, Number(req.body.narrationStartOffset) || 0);
+      const finalBuffer = await extendVideoBufferToDuration(rawBuffer, desiredDuration, audioBase64, narrationStartOffset);
       res.send(finalBuffer);
     } catch (err: any) {
       console.error("Error in /api/video-download:", err);
@@ -556,10 +562,11 @@ async function startServer() {
       }
       const targetDuration = Math.max(30, Number(req.body.targetDuration) || 30);
       const audioBase64 = req.body.audioBase64;
+      const narrationStartOffset = Math.max(0, Number(req.body.narrationStartOffset) || 0);
       const rawBuffer = fs.readFileSync(req.file.path);
       try { fs.unlinkSync(req.file.path); } catch {}
 
-      const extendedBuffer = await extendVideoBufferToDuration(rawBuffer, targetDuration, audioBase64);
+      const extendedBuffer = await extendVideoBufferToDuration(rawBuffer, targetDuration, audioBase64, narrationStartOffset);
       res.setHeader("Content-Type", "video/mp4");
       res.setHeader("Content-Disposition", "inline; filename=extended_scene.mp4");
       res.send(extendedBuffer);
@@ -831,8 +838,64 @@ async function startServer() {
     const sessionDir = path.join(os.tmpdir(), `master-stitch-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`);
     fs.mkdirSync(sessionDir, { recursive: true });
 
+    // Parse per-scene narrator voice choices if provided
+    let voiceoverConfig: Record<string, boolean> = {};
+    if (req.body.voiceoverConfig) {
+      try {
+        const parsed = typeof req.body.voiceoverConfig === 'string'
+          ? JSON.parse(req.body.voiceoverConfig)
+          : req.body.voiceoverConfig;
+        if (Array.isArray(parsed)) {
+          parsed.forEach((val, idx) => {
+            voiceoverConfig[idx.toString()] = Boolean(val);
+            voiceoverConfig[`scene-${idx + 1}`] = Boolean(val);
+            voiceoverConfig[(idx + 1).toString()] = Boolean(val);
+          });
+        } else if (typeof parsed === 'object' && parsed !== null) {
+          voiceoverConfig = parsed;
+        }
+      } catch (e) {
+        console.warn("[Stitch Engine] Could not parse voiceoverConfig:", e);
+      }
+    }
+
+    // Parse per-scene durations if provided (guaranteed at least 30s)
+    let durationsConfig: number[] = [];
+    if (req.body.durations) {
+      try {
+        const parsed = typeof req.body.durations === 'string'
+          ? JSON.parse(req.body.durations)
+          : req.body.durations;
+        if (Array.isArray(parsed)) {
+          durationsConfig = parsed.map(n => Math.max(30, Number(n) || 30));
+        }
+      } catch (e) {}
+    }
+
+    // Parse per-scene narrator start offsets (seconds delay before speech starts)
+    let startOffsetsConfig: Record<string, number> = {};
+    if (req.body.startOffsets) {
+      try {
+        const parsed = typeof req.body.startOffsets === 'string'
+          ? JSON.parse(req.body.startOffsets)
+          : req.body.startOffsets;
+        if (Array.isArray(parsed)) {
+          parsed.forEach((val, idx) => {
+            const num = Math.max(0, Number(val) || 0);
+            startOffsetsConfig[idx.toString()] = num;
+            startOffsetsConfig[`scene-${idx + 1}`] = num;
+            startOffsetsConfig[(idx + 1).toString()] = num;
+          });
+        } else if (typeof parsed === 'object' && parsed !== null) {
+          startOffsetsConfig = parsed;
+        }
+      } catch (e) {
+        console.warn("[Stitch Engine] Could not parse startOffsets:", e);
+      }
+    }
+
     try {
-      console.log(`[Stitch Engine] Received ${clips.length} clips and ${audios.length} synchronized audios in ${sessionDir}`);
+      console.log(`[Stitch Engine] Received ${clips.length} clips and ${audios.length} synchronized audios in ${sessionDir}. Voiceover config:`, voiceoverConfig, "Start offsets:", startOffsetsConfig);
       const normalizedFiles: string[] = [];
 
       for (let i = 0; i < clips.length; i++) {
@@ -851,24 +914,54 @@ async function startServer() {
 
         // Check if there is an explicit audio track provided for this scene (e.g., scene-1.wav)
         const clipMatch = file.originalname.match(/scene-(\d+)/i);
-        const targetSceneNum = clipMatch ? clipMatch[1] : `${i + 1}`;
+        const sceneNumInt = clipMatch ? parseInt(clipMatch[1], 10) : (i + 1);
+        const targetSceneNum = `${sceneNumInt}`;
+
+        // Check user's choice: whether to use the narrator voice for this scene (default: true)
+        let isVoiceoverEnabledForScene = true;
+        if (voiceoverConfig[targetSceneNum] !== undefined) {
+          isVoiceoverEnabledForScene = Boolean(voiceoverConfig[targetSceneNum]);
+        } else if (voiceoverConfig[`scene-${targetSceneNum}`] !== undefined) {
+          isVoiceoverEnabledForScene = Boolean(voiceoverConfig[`scene-${targetSceneNum}`]);
+        } else if (voiceoverConfig[i.toString()] !== undefined) {
+          isVoiceoverEnabledForScene = Boolean(voiceoverConfig[i.toString()]);
+        }
+
+        // Check user's choice: where narrator starts speaking per scene (default: 0s)
+        let narrationOffsetSec = 0;
+        if (startOffsetsConfig[targetSceneNum] !== undefined) {
+          narrationOffsetSec = Math.max(0, Number(startOffsetsConfig[targetSceneNum]) || 0);
+        } else if (startOffsetsConfig[`scene-${targetSceneNum}`] !== undefined) {
+          narrationOffsetSec = Math.max(0, Number(startOffsetsConfig[`scene-${targetSceneNum}`]) || 0);
+        } else if (startOffsetsConfig[i.toString()] !== undefined) {
+          narrationOffsetSec = Math.max(0, Number(startOffsetsConfig[i.toString()]) || 0);
+        }
+
+        const sceneTargetDuration = Math.max(30, durationsConfig[i] || 30);
+        const delayMs = Math.round(narrationOffsetSec * 1000);
+        const audioFilter = delayMs > 0
+          ? `adelay=delays=${delayMs}:all=1,apad=whole_dur=${sceneTargetDuration}`
+          : `apad=whole_dur=${sceneTargetDuration}`;
+
         const matchingAudio = audios.find(a => {
           const aMatch = a.originalname.match(/scene-(\d+)/i);
           return aMatch && aMatch[1] === targetSceneNum;
         }) || (audios[i] && !clipMatch ? audios[i] : null);
 
         let effectiveAudioPath: string | null = null;
-        if (matchingAudio) {
+        if (matchingAudio && isVoiceoverEnabledForScene) {
           const typedAudioPath = path.join(sessionDir, `audio_${i}.wav`);
           try {
             fs.copyFileSync(matchingAudio.path, typedAudioPath);
             if (fs.existsSync(typedAudioPath) && fs.statSync(typedAudioPath).size > 100) {
               effectiveAudioPath = typedAudioPath;
-              console.log(`[Stitch Engine] Muxing synchronized voiceover audio for Scene ${targetSceneNum}`);
+              console.log(`[Stitch Engine] Scene ${targetSceneNum}: User ENABLED narrator voiceover (starts at ${narrationOffsetSec}s / ${delayMs}ms). Muxing synchronized audio (${sceneTargetDuration}s).`);
             }
           } catch (aErr) {
             console.warn(`[Stitch Engine] Warning copying audio for scene ${i}:`, aErr);
           }
+        } else if (!isVoiceoverEnabledForScene) {
+          console.log(`[Stitch Engine] Scene ${targetSceneNum}: User opted NOT to use narrator voice. Outputting with clean silent audio (min ${sceneTargetDuration}s).`);
         }
 
         let normalizedSuccessfully = false;
@@ -876,12 +969,13 @@ async function startServer() {
         // Case A: Input is a static image or screenshot - convert to MP4 loop animation with matched audio or silence
         if (mediaInfo.isImage) {
           try {
-            console.log(`[Stitch Engine] Clip ${i} detected as image (${mediaInfo.ext}), generating loop animation (min 30s)`);
+            console.log(`[Stitch Engine] Clip ${i} detected as image (${mediaInfo.ext}), generating loop animation (min ${sceneTargetDuration}s)`);
             let imgCmd = '';
-            if (effectiveAudioPath) {
-              imgCmd = `ffmpeg -y -loop 1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            if (effectiveAudioPath && isVoiceoverEnabledForScene) {
+              // Ensure audio duration matches or pads to sceneTargetDuration (at least 30s) with configured start delay
+              imgCmd = `ffmpeg -y -loop 1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -filter_complex "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v];[1:a]${audioFilter}[a]" -map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -t ${sceneTargetDuration} "${normPath}"`;
             } else {
-              imgCmd = `ffmpeg -y -loop 1 -t 30 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              imgCmd = `ffmpeg -y -loop 1 -t ${sceneTargetDuration} -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -t ${sceneTargetDuration} -map 0:v:0 -map 1:a:0 "${normPath}"`;
             }
             await execAsync(imgCmd);
             normalizedSuccessfully = true;
@@ -889,7 +983,7 @@ async function startServer() {
             console.warn(`[Stitch Engine] Image loop conversion warning for clip ${i}:`, imgErr?.message || imgErr);
           }
         } else {
-          // Case B: Video input - probe audio stream or use explicit voiceover audio
+          // Case B: Video input
           let hasInternalAudio = false;
           let clipDuration = 8;
           try {
@@ -900,7 +994,7 @@ async function startServer() {
             }
           } catch {}
 
-          if (!effectiveAudioPath) {
+          if (!effectiveAudioPath && isVoiceoverEnabledForScene) {
             try {
               const { stdout } = await execAsync(`ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${effectiveInput}"`);
               if (stdout.trim().length > 0) {
@@ -914,17 +1008,20 @@ async function startServer() {
           // Primary normalization attempt with error tolerance & loop extension
           try {
             let normCmd = '';
-            if (effectiveAudioPath) {
-              // Mux explicit matched narration voiceover directly into the scene video, looping video if shorter than audio
-              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -map 0:v:0 -map 1:a:0 -shortest "${normPath}"`;
-            } else if (hasInternalAudio && clipDuration >= 30) {
+            if (effectiveAudioPath && isVoiceoverEnabledForScene) {
+              // Mux explicit matched narration voiceover with configured start delay, looped smoothly to at least 30s
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -filter_complex "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v];[1:a]${audioFilter}[a]" -map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -t ${sceneTargetDuration} "${normPath}"`;
+            } else if (!isVoiceoverEnabledForScene) {
+              // User explicitly chose NO narrator voice for this scene: replace any audio with silent audio track (min 30s)
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t ${sceneTargetDuration} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -map 0:v:0 -map 1:a:0 "${normPath}"`;
+            } else if (hasInternalAudio && clipDuration >= sceneTargetDuration) {
               normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
-            } else if (hasInternalAudio && clipDuration < 30) {
-              // Video has internal audio but is shorter than 30s: loop to 30s
-              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -t 30 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
+            } else if (hasInternalAudio && clipDuration < sceneTargetDuration) {
+              // Video has internal audio but is shorter than target: loop to target duration
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -t ${sceneTargetDuration} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
             } else {
               // No audio, loop video to at least 30s with silence track
-              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 30 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t ${sceneTargetDuration} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -map 0:v:0 -map 1:a:0 "${normPath}"`;
             }
             await execAsync(normCmd);
             normalizedSuccessfully = true;
@@ -933,7 +1030,7 @@ async function startServer() {
 
             // Secondary fallback: Explicit Matroska/WebM demuxer with 30s minimum
             try {
-              const fallbackCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -f matroska,webm -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 30 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              const fallbackCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -f matroska,webm -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t ${sceneTargetDuration} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -map 0:v:0 -map 1:a:0 "${normPath}"`;
               await execAsync(fallbackCmd);
               normalizedSuccessfully = true;
             } catch (fallbackErr: any) {
@@ -945,7 +1042,7 @@ async function startServer() {
         // Final safeguard: If normalization couldn't process this single clip, generate a 30-second graceful scene
         if (!normalizedSuccessfully || !fs.existsSync(normPath) || fs.statSync(normPath).size < 100) {
           console.warn(`[Stitch Engine] Generating graceful recovery scene for clip ${i} to guarantee complete master tour`);
-          const recoveryCmd = `ffmpeg -y -f lavfi -i color=c=0x0b0f19:s=1280x720:r=30 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 30 -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${normPath}"`;
+          const recoveryCmd = `ffmpeg -y -f lavfi -i color=c=0x0b0f19:s=1280x720:r=30 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t ${sceneTargetDuration} -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${normPath}"`;
           await execAsync(recoveryCmd);
         }
 

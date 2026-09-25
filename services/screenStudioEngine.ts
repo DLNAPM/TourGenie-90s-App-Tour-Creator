@@ -12,6 +12,7 @@ export interface RenderOptions {
   fps?: number;
   width?: number;
   height?: number;
+  narrationStartOffset?: number; // seconds delay before narrator starts speaking
 }
 
 /**
@@ -135,7 +136,8 @@ export async function renderScreenshotToVideo(
 
   // Determine duration: MUST be at least 30 seconds long per scene as requested
   const minSceneDuration = 30;
-  const neededAudioDuration = audioDuration > 0 ? Math.ceil(audioDuration + 0.6) : 0;
+  const startOffsetSec = Math.max(0, options.narrationStartOffset || 0);
+  const neededAudioDuration = audioDuration > 0 ? Math.ceil(audioDuration + startOffsetSec + 0.6) : 0;
   const requestedDuration = options.duration 
     ? Math.max(options.duration, neededAudioDuration, minSceneDuration) 
     : Math.max(minSceneDuration, neededAudioDuration);
@@ -225,11 +227,13 @@ export async function renderScreenshotToVideo(
 
   // Start recording
   mediaRecorder.start();
-  if (audioSourceNode) {
+  if (audioSourceNode && audioContext) {
     try {
-      audioSourceNode.start(0);
+      // Schedule audio start exactly at the requested offset seconds into scene
+      const scheduleTime = audioContext.currentTime + startOffsetSec;
+      audioSourceNode.start(scheduleTime);
     } catch (e) {
-      console.warn('Could not start audio node:', e);
+      console.warn('Could not start audio node with offset:', e);
     }
   }
 
@@ -566,7 +570,8 @@ function roundRect(
 export async function stitchClipsClientSide(
   clipUrls: string[],
   onProgress?: (stage: string, percent: number) => void,
-  durations?: number[]
+  durations?: number[],
+  voiceoverFlags?: boolean[]
 ): Promise<string> {
   if (clipUrls.length === 0) {
     throw new Error('No clips to stitch');
@@ -594,7 +599,10 @@ export async function stitchClipsClientSide(
   const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
   const audioContext = AudioCtxClass ? new AudioCtxClass() : null;
   const audioDest = audioContext ? audioContext.createMediaStreamDestination() : null;
-  if (audioDest) {
+  const gainNode = audioContext ? audioContext.createGain() : null;
+
+  if (audioDest && gainNode) {
+    gainNode.connect(audioDest);
     const audioTrack = audioDest.stream.getAudioTracks()[0];
     if (audioTrack) {
       stream.addTrack(audioTrack);
@@ -633,10 +641,10 @@ export async function stitchClipsClientSide(
   hiddenVideo.playsInline = true;
   hiddenVideo.muted = false;
 
-  if (audioContext && audioDest) {
+  if (audioContext && gainNode) {
     try {
       const audioSource = audioContext.createMediaElementSource(hiddenVideo);
-      audioSource.connect(audioDest);
+      audioSource.connect(gainNode);
     } catch (e) {
       console.warn('Could not connect media element source:', e);
     }
@@ -646,6 +654,12 @@ export async function stitchClipsClientSide(
     const url = clipUrls[i];
     const pct = Math.floor((i / clipUrls.length) * 100);
     if (onProgress) onProgress(`Assembling scene ${i + 1} of ${clipUrls.length}...`, pct);
+
+    const isVoiceoverActive = voiceoverFlags ? (voiceoverFlags[i] !== false) : true;
+    if (gainNode && audioContext) {
+      gainNode.gain.setValueAtTime(isVoiceoverActive ? 1.0 : 0.0, audioContext.currentTime);
+    }
+    hiddenVideo.muted = !isVoiceoverActive;
 
     const targetDurationMs = (durations && durations[i] ? Math.max(30, durations[i]) : 30) * 1000;
 

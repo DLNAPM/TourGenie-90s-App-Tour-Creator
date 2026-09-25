@@ -7,6 +7,9 @@ import {
   Square, 
   RefreshCw, 
   Volume2, 
+  VolumeX,
+  Mic,
+  MicOff,
   Check, 
   AlertCircle, 
   Film, 
@@ -35,6 +38,10 @@ export interface SceneMatchItem {
   videoUrl?: string;
   // Tracking if script was edited or swapped
   isAudioDirty?: boolean;
+  // Choice whether to use narrator voice in this scene
+  useVoiceover?: boolean;
+  // Choice where narrator starts speaking per scene (seconds)
+  narrationStartOffset?: number;
 }
 
 interface SceneScriptMatcherModalProps {
@@ -77,11 +84,33 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
       setItems(initialScenes.map(s => ({ 
         ...s, 
         duration: Math.max(30, s.duration || 30),
+        useVoiceover: s.useVoiceover !== false,
+        narrationStartOffset: Math.max(0, Number(s.narrationStartOffset) || 0),
         isAudioDirty: !s.audioUrl 
       })));
       setErrorMessage(null);
     }
   }, [isOpen, initialScenes]);
+
+  const toggleVoiceover = (idx: number) => {
+    setItems(prev => prev.map((item, i) => i === idx ? { ...item, useVoiceover: item.useVoiceover === false ? true : false } : item));
+  };
+
+  const setAllVoiceovers = (enabled: boolean) => {
+    setItems(prev => prev.map(item => ({ ...item, useVoiceover: enabled })));
+  };
+
+  const handleOffsetChange = (idx: number, offsetSec: number) => {
+    const clamped = Math.max(0, Math.min(25, Number(offsetSec) || 0));
+    setItems(prev => prev.map((item, i) => i === idx ? { ...item, narrationStartOffset: Math.round(clamped * 10) / 10 } : item));
+  };
+
+  const setAllOffsets = (offsetSec: number) => {
+    const clamped = Math.max(0, Math.min(25, Number(offsetSec) || 0));
+    setItems(prev => prev.map(item => ({ ...item, narrationStartOffset: Math.round(clamped * 10) / 10 })));
+  };
+
+  const activeVoiceoverCount = items.filter(it => it.useVoiceover !== false).length;
 
   // Clean up audio playback on unmount or close
   useEffect(() => {
@@ -388,6 +417,85 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
           </div>
         )}
 
+        {/* Global Voiceover Chooser & Timing Bar before stitching */}
+        <div className="bg-slate-900/90 border-b border-slate-800 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5">
+            <Volume2 className="w-4 h-4 text-emerald-400" />
+            <span className="font-bold text-slate-200">Narrator Voice for Master Video:</span>
+            <span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] ${
+              activeVoiceoverCount === items.length
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : activeVoiceoverCount === 0
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+            }`}>
+              {activeVoiceoverCount} of {items.length} scenes active
+            </span>
+            <span className="text-[11px] text-slate-400 hidden sm:inline">
+              (Choose whether to use the narrator voice and where speech starts per scene)
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 border-r border-slate-700/80 pr-2 mr-1">
+              <span className="text-[11px] text-slate-400 mr-1 flex items-center gap-1">
+                <Clock className="w-3 h-3 text-indigo-400" /> Set all start delays:
+              </span>
+              <button
+                type="button"
+                onClick={() => setAllOffsets(0)}
+                className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded text-[11px] font-semibold transition"
+                title="Narrator starts immediately on all scenes"
+              >
+                0s
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllOffsets(1)}
+                className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded text-[11px] font-semibold transition"
+                title="1 second start delay on all scenes"
+              >
+                1.0s
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllOffsets(2)}
+                className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded text-[11px] font-semibold transition"
+                title="2 seconds start delay on all scenes"
+              >
+                2.0s
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllOffsets(3)}
+                className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded text-[11px] font-semibold transition"
+                title="3 seconds start delay on all scenes"
+              >
+                3.0s
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setAllVoiceovers(true)}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+              title="Enable narrator voice on all scenes"
+            >
+              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+              Enable All Voices
+            </button>
+            <button
+              type="button"
+              onClick={() => setAllVoiceovers(false)}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition active:scale-95"
+              title="Mute narrator voice on all scenes (silent background audio)"
+            >
+              <VolumeX className="w-3.5 h-3.5 text-amber-400" />
+              Mute All Voices
+            </button>
+          </div>
+        </div>
+
         {/* Error message banner */}
         {errorMessage && (
           <div className="bg-red-500/10 border-b border-red-500/30 px-6 py-2.5 flex items-center justify-between text-xs text-red-300">
@@ -512,13 +620,38 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
                   {/* Right Column: Script Matching & Voiceover */}
                   <div className="flex-1 space-y-3">
                     
-                    {/* Header: Script assignment selector & Swap tool */}
+                    {/* Header: Script assignment selector, Per-Scene Voiceover Choice & Swap tool */}
                     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-700/60">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2.5">
                         <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
                           <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400" />
-                          Matched Script / Narration:
+                          Matched Script:
                         </label>
+
+                        {/* Per-Scene Voiceover Selector */}
+                        <button
+                          type="button"
+                          onClick={() => toggleVoiceover(idx)}
+                          disabled={isStitching}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition border ${
+                            item.useVoiceover !== false
+                              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                              : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                          }`}
+                          title={item.useVoiceover !== false ? "Narrator voice is ACTIVE for this scene. Click to mute." : "Narrator voice is MUTED for this scene. Click to enable."}
+                        >
+                          {item.useVoiceover !== false ? (
+                            <>
+                              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Narrator Voice: ON</span>
+                            </>
+                          ) : (
+                            <>
+                              <VolumeX className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Narrator Voice: MUTED</span>
+                            </>
+                          )}
+                        </button>
                       </div>
 
                       {/* Swap script dropdown */}
@@ -555,13 +688,19 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
                         value={item.narration}
                         onChange={(e) => handleScriptChange(idx, e.target.value)}
                         placeholder={`Enter voiceover script for Scene ${idx + 1}...`}
-                        className="w-full bg-slate-900/90 border border-slate-700 rounded-xl p-3 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none leading-relaxed resize-y font-normal"
+                        className={`w-full bg-slate-900/90 border rounded-xl p-3 text-xs sm:text-sm text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 outline-none leading-relaxed resize-y font-normal ${
+                          item.useVoiceover === false ? 'border-slate-700/60 opacity-80' : 'border-slate-700 focus:border-indigo-500'
+                        }`}
                       />
                       <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
                         <span>
                           {item.narration.trim().split(/\s+/).filter(Boolean).length} words • ~{estimateDuration(item.narration)}s speech time
                         </span>
-                        {item.isAudioDirty ? (
+                        {item.useVoiceover === false ? (
+                          <span className="text-amber-400 font-semibold flex items-center gap-1">
+                            <VolumeX className="w-3 h-3 text-amber-400" /> Narrator voice MUTED (silent in stitched master)
+                          </span>
+                        ) : item.isAudioDirty ? (
                           <span className="text-amber-400 font-semibold flex items-center gap-1">
                             <AlertCircle className="w-3 h-3" /> Voiceover audio needs re-sync
                           </span>
@@ -572,6 +711,111 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
                         ) : (
                           <span className="text-slate-400">No voiceover audio synthesized</span>
                         )}
+                      </div>
+                    </div>
+
+                    {/* Narrator Start Timing Controller per scene */}
+                    <div className="bg-slate-950/60 border border-slate-700/60 rounded-xl p-3 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                          <span className="text-xs font-bold text-slate-200">
+                            Where Narrator Starts Speaking:
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md font-mono font-bold text-xs bg-indigo-950 text-indigo-300 border border-indigo-500/40">
+                            {(item.narrationStartOffset || 0) === 0 
+                              ? '0.0s (Immediately at scene start)' 
+                              : `Starts at ${(item.narrationStartOffset || 0).toFixed(1)}s into scene`}
+                          </span>
+                        </div>
+
+                        {/* Quick preset buttons */}
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400 mr-0.5">Presets:</span>
+                          {[0, 1, 2, 3, 5].map((presetSec) => (
+                            <button
+                              key={presetSec}
+                              type="button"
+                              onClick={() => handleOffsetChange(idx, presetSec)}
+                              className={`px-2 py-0.5 rounded text-[11px] font-semibold transition border ${
+                                (item.narrationStartOffset || 0) === presetSec
+                                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
+                                  : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-slate-500 hover:bg-slate-800'
+                              }`}
+                            >
+                              {presetSec === 0 ? '0s' : `${presetSec}s`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Slider and direct input */}
+                      <div className="flex items-center gap-3">
+                        <span className="text-[11px] text-slate-400 font-mono w-6 text-right">0s</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max={Math.min(25, Math.floor((item.duration || 30) - 5))}
+                          step="0.5"
+                          value={item.narrationStartOffset || 0}
+                          onChange={(e) => handleOffsetChange(idx, parseFloat(e.target.value))}
+                          disabled={isStitching}
+                          className="flex-1 accent-indigo-500 h-2 bg-slate-900 rounded-lg cursor-pointer border border-slate-700/80"
+                        />
+                        <span className="text-[11px] text-slate-400 font-mono w-7">
+                          {Math.min(25, Math.floor((item.duration || 30) - 5))}s
+                        </span>
+                        <div className="flex items-center gap-1 pl-1 border-l border-slate-800">
+                          <input
+                            type="number"
+                            min="0"
+                            max={Math.min(25, Math.floor((item.duration || 30) - 5))}
+                            step="0.5"
+                            value={item.narrationStartOffset || 0}
+                            onChange={(e) => handleOffsetChange(idx, parseFloat(e.target.value) || 0)}
+                            disabled={isStitching}
+                            className="w-14 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-center text-xs font-mono font-bold text-indigo-300 outline-none focus:border-indigo-500"
+                          />
+                          <span className="text-[10px] text-slate-400 font-semibold">sec</span>
+                        </div>
+                      </div>
+
+                      {/* Visual Timeline Bar */}
+                      <div className="space-y-1 pt-0.5">
+                        <div className="w-full h-5 rounded-md bg-slate-900 border border-slate-800 flex overflow-hidden text-[9px] font-bold">
+                          {/* Pre-speech delay section */}
+                          {(item.narrationStartOffset || 0) > 0 && (
+                            <div 
+                              style={{ width: `${Math.min(90, ((item.narrationStartOffset || 0) / (item.duration || 30)) * 100)}%` }}
+                              className="bg-amber-500/20 border-r border-amber-500/40 text-amber-300 flex items-center justify-center truncate px-1"
+                              title={`Silence / intro delay: ${(item.narrationStartOffset || 0).toFixed(1)}s`}
+                            >
+                              Intro Delay {(item.narrationStartOffset || 0).toFixed(1)}s
+                            </div>
+                          )}
+                          {/* Spoken Narration section */}
+                          <div 
+                            style={{ 
+                              width: `${Math.max(10, Math.min(
+                                100 - (((item.narrationStartOffset || 0) / (item.duration || 30)) * 100),
+                                (estimateDuration(item.narration) / (item.duration || 30)) * 100
+                              ))}%` 
+                            }}
+                            className={`${item.useVoiceover !== false ? 'bg-emerald-500/30 text-emerald-200 border-r border-emerald-500/40' : 'bg-slate-700/40 text-slate-400 border-r border-slate-600'} flex items-center justify-center truncate px-1`}
+                            title={`Spoken narration duration: ~${estimateDuration(item.narration)}s`}
+                          >
+                            {item.useVoiceover !== false ? `Speech (~${estimateDuration(item.narration)}s)` : 'Muted'}
+                          </div>
+                          {/* Ambient outro remainder */}
+                          <div className="flex-1 bg-slate-950 text-slate-500 flex items-center justify-center truncate px-1">
+                            Ambient Outro
+                          </div>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-slate-400 font-mono px-0.5">
+                          <span>0:00 Scene Start</span>
+                          <span>Speech starts at: {(item.narrationStartOffset || 0).toFixed(1)}s</span>
+                          <span>{Math.round(item.duration || 30)}s Scene End</span>
+                        </div>
                       </div>
                     </div>
 
@@ -657,9 +901,9 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
           <div className="text-xs text-slate-400 space-y-0.5">
             <p className="font-semibold text-slate-300 flex items-center gap-1.5">
               <Check className="w-4 h-4 text-emerald-400" />
-              100% Sequence Guaranteed
+              100% Sequence & Voiceover Selection Guaranteed
             </p>
-            <p>Master video will stitch scenes in the exact 1..{items.length} sequence above with matching voiceovers.</p>
+            <p>Master video will stitch scenes in the exact 1..{items.length} sequence with {activeVoiceoverCount} of {items.length} narrator voiceovers enabled.</p>
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto">
