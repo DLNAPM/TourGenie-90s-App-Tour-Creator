@@ -188,7 +188,7 @@ export default function App() {
           id: c.id || `clip_${idx}_${Date.now()}`,
           order: idx,
           title: c.title || c.analysis || matchingScene?.visualPrompt || `Slide ${idx + 1}`,
-          duration: c.duration || matchingScene?.duration || 15,
+          duration: Math.max(30, c.duration || matchingScene?.duration || 30),
           narration: c.narration || matchingScene?.narration || '',
           analysis: c.analysis || c.narration || '',
           cameraMotion: c.cameraMotion || matchingScene?.visualPrompt || 'Slow Zoom In',
@@ -214,7 +214,7 @@ export default function App() {
           id: s.id || `scene_clip_${idx}_${Date.now()}`,
           order: idx,
           title: s.visualPrompt || `Slide ${idx + 1}`,
-          duration: s.duration || 15,
+          duration: Math.max(30, s.duration || 30),
           narration: s.narration || '',
           analysis: s.narration || '',
           cameraMotion: s.visualPrompt || 'Slow Zoom In',
@@ -232,7 +232,7 @@ export default function App() {
         id: `draft_slide_${idx}_${Date.now()}`,
         order: idx,
         title: `Slide ${idx + 1}`,
-        duration: 15,
+        duration: 30,
         narration: '',
         analysis: '',
         cameraMotion: 'Slow Zoom In',
@@ -806,7 +806,7 @@ export default function App() {
               videoUrl = await tourService.generateSceneVideo(
                 { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
                 shot,
-                { duration: clip.duration || 15, audioBase64: clip.audioUrl, sceneIndex: i }
+                { duration: Math.max(30, clip.duration || 30), audioBase64: clip.audioUrl, sceneIndex: i }
               );
               clip.videoUrl = videoUrl;
               clip.previewUrl = videoUrl;
@@ -828,7 +828,7 @@ export default function App() {
                 videoUrl = await tourService.generateSceneVideo(
                   { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
                   shot,
-                  { duration: clip.duration || 15, audioBase64: clip.audioUrl, sceneIndex: i }
+                  { duration: Math.max(30, clip.duration || 30), audioBase64: clip.audioUrl, sceneIndex: i }
                 );
                 clip.videoUrl = videoUrl;
                 clip.previewUrl = videoUrl;
@@ -914,7 +914,8 @@ export default function App() {
           (stage, pct) => {
             setRenderStage(stage);
             setRenderProgress(60 + Math.floor(pct * 0.35));
-          }
+          },
+          clipsToRender.map(c => Math.max(30, c.duration || 30))
         );
       }
 
@@ -1428,7 +1429,7 @@ export default function App() {
                             {videoEngineMode === 'studio' && <CheckCircleIcon className="w-4 h-4 text-indigo-600" />}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                            Animates your actual screenshots with 100% text fidelity. Zero AI foreign glyphs or hallucinations.
+                            Animates screenshots with 100% text fidelity, rendering full 30s+ scenes with synchronized voiceover.
                           </p>
                         </button>
                         <button
@@ -1445,7 +1446,7 @@ export default function App() {
                             {videoEngineMode === 'veo' && <CheckCircleIcon className="w-4 h-4 text-indigo-600" />}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                            Generative diffusion model via Google Veo with strict American English constraints.
+                            Google Veo generative model, auto-looped & extended to 30s+ to fit full tour scripts.
                           </p>
                         </button>
                       </div>

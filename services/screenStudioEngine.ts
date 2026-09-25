@@ -565,7 +565,8 @@ function roundRect(
  */
 export async function stitchClipsClientSide(
   clipUrls: string[],
-  onProgress?: (stage: string, percent: number) => void
+  onProgress?: (stage: string, percent: number) => void,
+  durations?: number[]
 ): Promise<string> {
   if (clipUrls.length === 0) {
     throw new Error('No clips to stitch');
@@ -646,6 +647,8 @@ export async function stitchClipsClientSide(
     const pct = Math.floor((i / clipUrls.length) * 100);
     if (onProgress) onProgress(`Assembling scene ${i + 1} of ${clipUrls.length}...`, pct);
 
+    const targetDurationMs = (durations && durations[i] ? Math.max(30, durations[i]) : 30) * 1000;
+
     const isImage = url.startsWith('data:image') || /\.(png|jpe?g|webp|gif|bmp)(\?.*)?$/i.test(url);
     if (isImage) {
       await new Promise<void>((resolveImage) => {
@@ -653,7 +656,7 @@ export async function stitchClipsClientSide(
         img.crossOrigin = 'anonymous';
         img.onload = () => {
           let elapsed = 0;
-          const durationMs = 5000;
+          const durationMs = targetDurationMs;
           const startTime = performance.now();
           const imgLoop = (now: number) => {
             elapsed = now - startTime;
@@ -692,9 +695,19 @@ export async function stitchClipsClientSide(
     await new Promise<void>((resolveClip) => {
       let isEnded = false;
       let animFrameId = 0;
+      const clipStartTime = performance.now();
 
       const drawLoop = () => {
         if (isEnded) return;
+
+        const elapsed = performance.now() - clipStartTime;
+        if (elapsed >= targetDurationMs) {
+          isEnded = true;
+          cancelAnimationFrame(animFrameId);
+          resolveClip();
+          return;
+        }
+
         ctx.fillStyle = '#090d16';
         ctx.fillRect(0, 0, width, height);
 
@@ -725,9 +738,20 @@ export async function stitchClipsClientSide(
 
       hiddenVideo.onended = () => {
         if (isEnded) return;
-        isEnded = true;
-        cancelAnimationFrame(animFrameId);
-        resolveClip();
+        const elapsed = performance.now() - clipStartTime;
+        if (elapsed < targetDurationMs) {
+          // Loop video clip smoothly if shorter than scene duration (e.g. 8s vs 30s)
+          hiddenVideo.currentTime = 0;
+          hiddenVideo.play().catch(() => {
+            isEnded = true;
+            cancelAnimationFrame(animFrameId);
+            resolveClip();
+          });
+        } else {
+          isEnded = true;
+          cancelAnimationFrame(animFrameId);
+          resolveClip();
+        }
       };
 
       hiddenVideo.onerror = () => {

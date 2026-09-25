@@ -74,7 +74,11 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
   // Initialize or reset internal state when modal opens or initialScenes change
   useEffect(() => {
     if (isOpen && initialScenes) {
-      setItems(initialScenes.map(s => ({ ...s, isAudioDirty: !s.audioUrl })));
+      setItems(initialScenes.map(s => ({ 
+        ...s, 
+        duration: Math.max(30, s.duration || 30),
+        isAudioDirty: !s.audioUrl 
+      })));
       setErrorMessage(null);
     }
   }, [isOpen, initialScenes]);
@@ -280,10 +284,10 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
     setShowBulkPaste(false);
   };
 
-  // Estimated spoken duration (~2.5 words/sec)
+  // Estimated spoken duration (~2.5 words/sec), min 30s per scene
   const estimateDuration = (text: string) => {
     const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
-    return Math.max(5, Math.ceil(wordCount / 2.5));
+    return Math.max(30, Math.ceil(wordCount / 2.5));
   };
 
   return (

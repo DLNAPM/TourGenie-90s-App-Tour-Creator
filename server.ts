@@ -33,6 +33,16 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+  // File upload staging directory
+  const uploadDir = path.join(os.tmpdir(), "tourgenie-uploads");
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+  const upload = multer({
+    dest: uploadDir,
+    limits: { fileSize: 250 * 1024 * 1024 } // 250MB per file
+  });
+
   // --- API Routes ---
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
@@ -345,7 +355,92 @@ async function startServer() {
     }
   });
 
-  // 4. Download Video (Streams real MP4 back to browser)
+  // Helper: Extend video clip duration to match tour script and narration (at least 30 seconds)
+  async function extendVideoBufferToDuration(
+    videoBuffer: Buffer,
+    targetDurationSec: number = 30,
+    audioBase64?: string
+  ): Promise<Buffer> {
+    const sessionDir = path.join(os.tmpdir(), `fit-duration-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const rawVideoPath = path.join(sessionDir, 'raw.mp4');
+    const outVideoPath = path.join(sessionDir, 'extended.mp4');
+
+    try {
+      fs.writeFileSync(rawVideoPath, videoBuffer);
+
+      let audioPath: string | null = null;
+      if (audioBase64) {
+        try {
+          const rawAudio = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
+          const audioBuf = Buffer.from(rawAudio, 'base64');
+          if (audioBuf.length > 100) {
+            audioPath = path.join(sessionDir, 'audio.wav');
+            fs.writeFileSync(audioPath, audioBuf);
+          }
+        } catch (e) {
+          console.warn("[Video Extender] Could not write audio buffer:", e);
+        }
+      }
+
+      let minTarget = Math.max(30, Number(targetDurationSec) || 30);
+
+      // If audio is provided, probe audio duration to ensure video is at least as long as audio
+      if (audioPath) {
+        try {
+          const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`);
+          const probed = parseFloat(stdout.trim());
+          if (!isNaN(probed) && probed > 0) {
+            minTarget = Math.max(minTarget, Math.ceil(probed));
+          }
+        } catch (probeErr) {
+          console.warn("[Video Extender] Could not probe audio duration:", probeErr);
+        }
+      }
+
+      // Probe raw video duration
+      let rawDuration = 8;
+      try {
+        const { stdout } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${rawVideoPath}"`);
+        const probed = parseFloat(stdout.trim());
+        if (!isNaN(probed) && probed > 0) {
+          rawDuration = probed;
+        }
+      } catch {}
+
+      // If video is already long enough and no audio needs to be muxed, return original
+      if (rawDuration >= minTarget && !audioPath) {
+        return videoBuffer;
+      }
+
+      console.log(`[Video Extender] Extending ${rawDuration.toFixed(1)}s video to fit tour script (${minTarget}s) with audio: ${Boolean(audioPath)}`);
+
+      let cmd = '';
+      if (audioPath) {
+        // Loop video smoothly until narration audio finishes, muxing audio directly into the MP4
+        cmd = `ffmpeg -y -stream_loop -1 -i "${rawVideoPath}" -i "${audioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -shortest "${outVideoPath}"`;
+      } else {
+        // Loop video smoothly until target duration is met
+        cmd = `ffmpeg -y -stream_loop -1 -i "${rawVideoPath}" -t ${minTarget} -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p "${outVideoPath}"`;
+      }
+
+      await execAsync(cmd);
+
+      if (fs.existsSync(outVideoPath) && fs.statSync(outVideoPath).size > 1000) {
+        return fs.readFileSync(outVideoPath);
+      }
+      return videoBuffer;
+    } catch (extErr) {
+      console.warn("[Video Extender] FFmpeg extension error, falling back to raw buffer:", extErr);
+      return videoBuffer;
+    } finally {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+
+  // 4. Download Video (Streams real MP4 back to browser, ensuring scene duration >= 30s)
   app.post("/api/video-download", async (req, res) => {
     try {
       const apiKey = getApiKey(req);
@@ -353,7 +448,7 @@ async function startServer() {
         return res.status(401).json({ error: "Gemini API Key is missing or not configured." });
       }
       const ai = new GoogleGenAI({ apiKey });
-      const { operationName } = req.body;
+      const { operationName, targetDuration, audioBase64 } = req.body;
 
       if (!operationName) {
         return res.status(400).json({ error: "operationName is required" });
@@ -367,12 +462,16 @@ async function startServer() {
         return res.status(400).json({ error: "Video generation is not completed yet" });
       }
 
+      const desiredDuration = Math.max(30, Number(targetDuration) || 30);
+
       // 1. Check if raw videoBytes were returned in response
       const videoObj = updated.response?.generatedVideos?.[0]?.video;
       if (videoObj?.videoBytes) {
+        const rawBuffer = Buffer.from(videoObj.videoBytes, "base64");
+        const finalBuffer = await extendVideoBufferToDuration(rawBuffer, desiredDuration, audioBase64);
         res.setHeader("Content-Type", "video/mp4");
         res.setHeader("Content-Disposition", "inline; filename=scene.mp4");
-        return res.send(Buffer.from(videoObj.videoBytes, "base64"));
+        return res.send(finalBuffer);
       }
 
       const uri = videoObj?.uri;
@@ -385,13 +484,12 @@ async function startServer() {
       try {
         await ai.files.download({ file: uri, downloadPath: tempFilePath });
         if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 1000) {
+          const rawBuffer = fs.readFileSync(tempFilePath);
+          try { fs.unlinkSync(tempFilePath); } catch {}
+          const finalBuffer = await extendVideoBufferToDuration(rawBuffer, desiredDuration, audioBase64);
           res.setHeader("Content-Type", "video/mp4");
           res.setHeader("Content-Disposition", "inline; filename=scene.mp4");
-          const stream = fs.createReadStream(tempFilePath);
-          stream.on("close", () => {
-            fs.unlink(tempFilePath, () => {});
-          });
-          return stream.pipe(res);
+          return res.send(finalBuffer);
         }
       } catch (sdkErr: any) {
         console.warn("ai.files.download attempt failed, trying direct HTTP fetch:", sdkErr?.message);
@@ -441,10 +539,33 @@ async function startServer() {
       res.setHeader("Content-Disposition", "inline; filename=scene.mp4");
 
       const arrayBuffer = await videoRes.arrayBuffer();
-      res.send(Buffer.from(arrayBuffer));
+      const rawBuffer = Buffer.from(arrayBuffer);
+      const finalBuffer = await extendVideoBufferToDuration(rawBuffer, desiredDuration, audioBase64);
+      res.send(finalBuffer);
     } catch (err: any) {
       console.error("Error in /api/video-download:", err);
       res.status(500).json({ error: err.message || "Failed to download video" });
+    }
+  });
+
+  // Dedicated endpoint to extend any uploaded or existing video clip to fit tour script
+  app.post("/api/extend-video", upload.single("video"), async (req, res) => {
+    try {
+      if (!req.file || !req.file.path) {
+        return res.status(400).json({ error: "No video file provided" });
+      }
+      const targetDuration = Math.max(30, Number(req.body.targetDuration) || 30);
+      const audioBase64 = req.body.audioBase64;
+      const rawBuffer = fs.readFileSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch {}
+
+      const extendedBuffer = await extendVideoBufferToDuration(rawBuffer, targetDuration, audioBase64);
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", "inline; filename=extended_scene.mp4");
+      res.send(extendedBuffer);
+    } catch (err: any) {
+      console.error("Error in /api/extend-video:", err);
+      res.status(500).json({ error: err.message || "Failed to extend video" });
     }
   });
 
@@ -683,15 +804,6 @@ async function startServer() {
   }
 
   // 8. Stitch Master Video (All Scenes Concatenated with FFmpeg into a Single Broadcast MP4)
-  const uploadDir = path.join(os.tmpdir(), "tourgenie-uploads");
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-  }
-  const upload = multer({
-    dest: uploadDir,
-    limits: { fileSize: 250 * 1024 * 1024 } // 250MB per file
-  });
-
   app.post("/api/stitch-master-video", upload.any(), async (req, res) => {
     const allFiles = (req.files as Express.Multer.File[]) || [];
     if (!allFiles || allFiles.length === 0) {
@@ -764,12 +876,12 @@ async function startServer() {
         // Case A: Input is a static image or screenshot - convert to MP4 loop animation with matched audio or silence
         if (mediaInfo.isImage) {
           try {
-            console.log(`[Stitch Engine] Clip ${i} detected as image (${mediaInfo.ext}), generating loop animation`);
+            console.log(`[Stitch Engine] Clip ${i} detected as image (${mediaInfo.ext}), generating loop animation (min 30s)`);
             let imgCmd = '';
             if (effectiveAudioPath) {
               imgCmd = `ffmpeg -y -loop 1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
             } else {
-              imgCmd = `ffmpeg -y -loop 1 -t 10 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              imgCmd = `ffmpeg -y -loop 1 -t 30 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
             }
             await execAsync(imgCmd);
             normalizedSuccessfully = true;
@@ -779,6 +891,15 @@ async function startServer() {
         } else {
           // Case B: Video input - probe audio stream or use explicit voiceover audio
           let hasInternalAudio = false;
+          let clipDuration = 8;
+          try {
+            const { stdout: durOut } = await execAsync(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${effectiveInput}"`);
+            const parsedDur = parseFloat(durOut.trim());
+            if (!isNaN(parsedDur) && parsedDur > 0) {
+              clipDuration = parsedDur;
+            }
+          } catch {}
+
           if (!effectiveAudioPath) {
             try {
               const { stdout } = await execAsync(`ffprobe -v error -select_streams a -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${effectiveInput}"`);
@@ -790,25 +911,29 @@ async function startServer() {
             }
           }
 
-          // Primary normalization attempt with error tolerance
+          // Primary normalization attempt with error tolerance & loop extension
           try {
             let normCmd = '';
             if (effectiveAudioPath) {
-              // Mux explicit matched narration voiceover directly into the scene video
-              normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -map 0:v:0 -map 1:a:0 -shortest "${normPath}"`;
-            } else if (hasInternalAudio) {
+              // Mux explicit matched narration voiceover directly into the scene video, looping video if shorter than audio
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -i "${effectiveAudioPath}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k -map 0:v:0 -map 1:a:0 -shortest "${normPath}"`;
+            } else if (hasInternalAudio && clipDuration >= 30) {
               normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
+            } else if (hasInternalAudio && clipDuration < 30) {
+              // Video has internal audio but is shorter than 30s: loop to 30s
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -t 30 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 192k "${normPath}"`;
             } else {
-              normCmd = `ffmpeg -y -err_detect ignore_err -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              // No audio, loop video to at least 30s with silence track
+              normCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 30 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
             }
             await execAsync(normCmd);
             normalizedSuccessfully = true;
           } catch (primaryErr: any) {
             console.warn(`[Stitch Engine] Primary normalization failed for clip ${i}, attempting secondary demux:`, primaryErr?.message || primaryErr);
 
-            // Secondary fallback: Explicit Matroska/WebM demuxer
+            // Secondary fallback: Explicit Matroska/WebM demuxer with 30s minimum
             try {
-              const fallbackCmd = `ffmpeg -y -err_detect ignore_err -f matroska,webm -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
+              const fallbackCmd = `ffmpeg -y -err_detect ignore_err -stream_loop -1 -f matroska,webm -i "${effectiveInput}" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 30 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -map 0:v:0 -map 1:a:0 "${normPath}"`;
               await execAsync(fallbackCmd);
               normalizedSuccessfully = true;
             } catch (fallbackErr: any) {
@@ -817,10 +942,10 @@ async function startServer() {
           }
         }
 
-        // Final safeguard: If normalization couldn't process this single clip, generate a 5-second graceful scene
+        // Final safeguard: If normalization couldn't process this single clip, generate a 30-second graceful scene
         if (!normalizedSuccessfully || !fs.existsSync(normPath) || fs.statSync(normPath).size < 100) {
           console.warn(`[Stitch Engine] Generating graceful recovery scene for clip ${i} to guarantee complete master tour`);
-          const recoveryCmd = `ffmpeg -y -f lavfi -i color=c=0x0b0f19:s=1280x720:r=30 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 5 -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${normPath}"`;
+          const recoveryCmd = `ffmpeg -y -f lavfi -i color=c=0x0b0f19:s=1280x720:r=30 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -t 30 -c:v libx264 -preset ultrafast -crf 22 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest "${normPath}"`;
           await execAsync(recoveryCmd);
         }
 

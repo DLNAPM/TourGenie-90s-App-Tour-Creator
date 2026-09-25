@@ -138,11 +138,11 @@ export class TourService {
     const engineMode = options?.engineMode || (screenshot ? 'studio' : 'veo');
     const effectiveScreenshot = screenshot || createSceneFallbackCanvas(scene.visualPrompt || scene.timestamp || 'Product Tour', scene.narration);
 
-    // 1. Pixel-Perfect Screen Studio Engine (Default for uploaded screenshots)
+    // 1. Pixel-Perfect Screen Studio Engine (Default mode, or when requested)
     // Preserves 100% of the original English UI screenshot with zero diffusion hallucinations or foreign glyphs
-    if (screenshot && engineMode === 'studio') {
+    if (engineMode === 'studio' || (!options?.engineMode && screenshot)) {
       try {
-        const videoUrl = await renderScreenshotToVideo(screenshot, {
+        const videoUrl = await renderScreenshotToVideo(effectiveScreenshot, {
           duration: effectiveDuration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -269,11 +269,16 @@ export class TourService {
     }
 
     // Download the final MP4 video via server proxy
-    // The server fetches the file and streams raw bytes to the browser.
+    // The server fetches the file, extends duration to >=30s to fit the tour script, and muxes narration audio
     const downloadRes = await fetch("/api/video-download", {
       method: "POST",
       headers: getApiHeaders(),
-      body: JSON.stringify({ operationName })
+      body: JSON.stringify({ 
+        operationName,
+        targetDuration: effectiveDuration,
+        audioBase64: options?.audioBase64,
+        narration: scene.narration
+      })
     });
 
     if (!downloadRes.ok) {
