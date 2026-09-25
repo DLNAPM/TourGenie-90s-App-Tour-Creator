@@ -490,62 +490,65 @@ async function startServer() {
 
       const uri = videoObj?.uri;
       if (!uri) {
-        return res.status(404).json({ error: "No video download URI found in completed operation" });
+        return res.status(404).json({ error: "No video download URI found in completed Veo operation" });
       }
 
-      // 2. Try SDK ai.files.download to temp file first
-      const tempFilePath = path.join(os.tmpdir(), `veo_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`);
+      // 2. Fetch using official Gemini API pattern (direct fetch with x-goog-api-key)
+      let videoRes: Response | null = null;
+      let lastErrText = "";
+
+      // Attempt 1: Direct fetch with x-goog-api-key header (Standard Gemini API spec)
       try {
-        await ai.files.download({ file: uri, downloadPath: tempFilePath });
-        if (fs.existsSync(tempFilePath) && fs.statSync(tempFilePath).size > 1000) {
-          const rawBuffer = fs.readFileSync(tempFilePath);
-          try { fs.unlinkSync(tempFilePath); } catch {}
-          const finalBuffer = await extendVideoBufferToDuration(rawBuffer, desiredDuration, audioBase64);
-          res.setHeader("Content-Type", "video/mp4");
-          res.setHeader("Content-Disposition", "inline; filename=scene.mp4");
-          return res.send(finalBuffer);
-        }
-      } catch (sdkErr: any) {
-        console.warn("ai.files.download attempt failed, trying direct HTTP fetch:", sdkErr?.message);
-        if (fs.existsSync(tempFilePath)) {
-          try { fs.unlinkSync(tempFilePath); } catch {}
-        }
-      }
-
-      // 3. Construct the media download URL with :download?alt=media
-      let downloadUrl = uri;
-      if (!downloadUrl.startsWith("http")) {
-        downloadUrl = `https://generativelanguage.googleapis.com/v1beta/${downloadUrl}`;
-      }
-      if (!downloadUrl.includes(":download")) {
-        downloadUrl = `${downloadUrl}:download?alt=media`;
-      } else if (!downloadUrl.includes("alt=media")) {
-        downloadUrl += (downloadUrl.includes("?") ? "&" : "?") + "alt=media";
-      }
-
-      // Ensure key query parameter is included for Google Files media download
-      const sep = downloadUrl.includes("?") ? "&" : "?";
-      const downloadUrlWithKey = downloadUrl.includes("key=")
-        ? downloadUrl
-        : `${downloadUrl}${sep}key=${encodeURIComponent(apiKey)}`;
-
-      let videoRes = await fetch(downloadUrlWithKey, {
-        headers: { 'x-goog-api-key': apiKey }
-      });
-
-      if (!videoRes.ok) {
-        // Fallback: try raw uri with key
-        const rawSep = uri.includes("?") ? "&" : "?";
-        const rawUriWithKey = uri.includes("key=") ? uri : `${uri}${rawSep}key=${encodeURIComponent(apiKey)}`;
-        videoRes = await fetch(rawUriWithKey, {
+        videoRes = await fetch(uri, {
           headers: { 'x-goog-api-key': apiKey }
         });
+        if (!videoRes.ok) {
+          lastErrText = await videoRes.text();
+        }
+      } catch (fErr: any) {
+        lastErrText = fErr.message;
       }
 
-      if (!videoRes.ok) {
-        const errText = await videoRes.text();
-        console.error("Google Files download failed:", videoRes.status, errText);
-        return res.status(videoRes.status).json({ error: `Video download failed (${videoRes.status}): ${errText}` });
+      // Attempt 2: If direct fetch failed and uri does not include key query param, try with key param
+      if (!videoRes || !videoRes.ok) {
+        const sep = uri.includes("?") ? "&" : "?";
+        const uriWithKey = uri.includes("key=") ? uri : `${uri}${sep}key=${encodeURIComponent(apiKey)}`;
+        try {
+          const res2 = await fetch(uriWithKey, {
+            headers: { 'x-goog-api-key': apiKey }
+          });
+          if (res2.ok) {
+            videoRes = res2;
+          } else {
+            lastErrText = await res2.text();
+          }
+        } catch (fErr2: any) {
+          lastErrText = fErr2.message;
+        }
+      }
+
+      // Attempt 3: If URI is a Google Files resource without prefix, prepend base endpoint
+      if ((!videoRes || !videoRes.ok) && !uri.startsWith("http")) {
+        const fullUrl = `https://generativelanguage.googleapis.com/v1beta/${uri}:download?alt=media&key=${encodeURIComponent(apiKey)}`;
+        try {
+          const res3 = await fetch(fullUrl, {
+            headers: { 'x-goog-api-key': apiKey }
+          });
+          if (res3.ok) {
+            videoRes = res3;
+          } else {
+            lastErrText = await res3.text();
+          }
+        } catch (fErr3: any) {
+          lastErrText = fErr3.message;
+        }
+      }
+
+      if (!videoRes || !videoRes.ok) {
+        console.error("Google Veo video media download failed:", videoRes?.status, lastErrText);
+        return res.status(videoRes?.status || 502).json({
+          error: `Google Veo video download failed (${videoRes?.status || 502}): ${lastErrText || "Unable to retrieve video stream from Google servers."}`
+        });
       }
 
       const contentType = videoRes.headers.get("content-type") || "video/mp4";

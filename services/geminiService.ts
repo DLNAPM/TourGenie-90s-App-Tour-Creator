@@ -286,9 +286,19 @@ export class TourService {
     });
 
     if (!downloadRes.ok) {
-      const errData = await downloadRes.json().catch(() => ({}));
+      let errorMsg = `HTTP ${downloadRes.status} ${downloadRes.statusText || ''}`.trim();
+      try {
+        const text = await downloadRes.text();
+        try {
+          const json = JSON.parse(text);
+          errorMsg = json.error?.message || json.error || json.message || errorMsg;
+        } catch {
+          if (text) errorMsg = text.slice(0, 300);
+        }
+      } catch {}
+
       if (effectiveScreenshot) {
-        console.warn("Veo download failed, falling back to Screen Studio:", errData.error);
+        console.warn("Veo download failed, falling back to Screen Studio:", errorMsg);
         return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
@@ -298,12 +308,21 @@ export class TourService {
           motionStyle: options?.motionStyle || 'auto'
         });
       }
-      throw new Error(errData.error || `Failed to download video file (status ${downloadRes.status})`);
+      throw new Error(errorMsg || `Failed to download video file (status ${downloadRes.status})`);
     }
 
     const videoBlob = await downloadRes.blob();
     if (!videoBlob || videoBlob.size === 0 || videoBlob.type === "application/json") {
+      let reason = "Invalid or empty video file received from generator.";
+      if (videoBlob && videoBlob.type === "application/json") {
+        try {
+          const text = await videoBlob.text();
+          const json = JSON.parse(text);
+          reason = json.error?.message || json.error || reason;
+        } catch {}
+      }
       if (effectiveScreenshot) {
+        console.warn("Veo returned invalid video blob, falling back to Screen Studio:", reason);
         return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
@@ -313,7 +332,7 @@ export class TourService {
           motionStyle: options?.motionStyle || 'auto'
         });
       }
-      throw new Error("Invalid or empty video file received from generator.");
+      throw new Error(reason);
     }
 
     return URL.createObjectURL(videoBlob);
