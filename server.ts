@@ -12,8 +12,8 @@ import { GoogleGenAI, Type, Modality, GenerateVideosOperation } from "@google/ge
 const execAsync = promisify(exec);
 
 function getApiKey(req: express.Request): string {
-  // 1. Fetch API key from Render.com's environment variable "API_KEY"
-  const envKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+  // 1. Fetch API key from Render.com's environment variable "API_KEY", or standard GEMINI_API_KEY / GOOGLE_API_KEY
+  const envKey = process.env.API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
   if (envKey && envKey !== 'UNUSED_PLACEHOLDER_FOR_API_KEY' && envKey !== 'RENDER_API_KEY_PLACEHOLDER') {
     return envKey;
   }
@@ -389,14 +389,23 @@ async function startServer() {
         downloadUrl += (downloadUrl.includes("?") ? "&" : "?") + "alt=media";
       }
 
-      let videoRes = await fetch(downloadUrl, {
+      // Ensure key query parameter is included for Google Files media download
+      const sep = downloadUrl.includes("?") ? "&" : "?";
+      const downloadUrlWithKey = downloadUrl.includes("key=")
+        ? downloadUrl
+        : `${downloadUrl}${sep}key=${encodeURIComponent(apiKey)}`;
+
+      let videoRes = await fetch(downloadUrlWithKey, {
         headers: { 'x-goog-api-key': apiKey }
       });
 
       if (!videoRes.ok) {
-        // Fallback to passing key as query param if header rejected
-        const urlWithKey = downloadUrl + (downloadUrl.includes("?") ? "&" : "?") + `key=${encodeURIComponent(apiKey)}`;
-        videoRes = await fetch(urlWithKey);
+        // Fallback: try raw uri with key
+        const rawSep = uri.includes("?") ? "&" : "?";
+        const rawUriWithKey = uri.includes("key=") ? uri : `${uri}${rawSep}key=${encodeURIComponent(apiKey)}`;
+        videoRes = await fetch(rawUriWithKey, {
+          headers: { 'x-goog-api-key': apiKey }
+        });
       }
 
       if (!videoRes.ok) {

@@ -23,6 +23,61 @@ function getApiHeaders(): Record<string, string> {
   return headers;
 }
 
+function createSceneFallbackCanvas(title: string, subtitle?: string): string {
+  if (typeof document === 'undefined') return '';
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1280;
+    canvas.height = 720;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+
+    const grad = ctx.createLinearGradient(0, 0, 1280, 720);
+    grad.addColorStop(0, '#0f172a');
+    grad.addColorStop(0.5, '#1e1b4b');
+    grad.addColorStop(1, '#312e81');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 1280, 720);
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < 1280; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, 720);
+      ctx.stroke();
+    }
+    for (let y = 0; y < 720; y += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(1280, y);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#6366f1';
+    ctx.beginPath();
+    ctx.roundRect(140, 180, 190, 36, 18);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px Inter, sans-serif';
+    ctx.fillText('FEATURE SHOWCASE', 156, 203);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 42px Inter, sans-serif';
+    ctx.fillText(title.slice(0, 40), 140, 275);
+
+    if (subtitle) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '20px Inter, sans-serif';
+      ctx.fillText(subtitle.slice(0, 70), 140, 325);
+    }
+
+    return canvas.toDataURL('image/png');
+  } catch {
+    return '';
+  }
+}
+
 export class TourService {
   async checkBackendKey(): Promise<boolean> {
     try {
@@ -80,6 +135,7 @@ export class TourService {
     }
   ): Promise<string> {
     const engineMode = options?.engineMode || (screenshot ? 'studio' : 'veo');
+    const effectiveScreenshot = screenshot || createSceneFallbackCanvas(scene.visualPrompt || scene.timestamp || 'Product Tour', scene.narration);
 
     // 1. Pixel-Perfect Screen Studio Engine (Default for uploaded screenshots)
     // Preserves 100% of the original English UI screenshot with zero diffusion hallucinations or foreign glyphs
@@ -113,9 +169,9 @@ export class TourService {
         })
       });
     } catch (netErr: any) {
-      if (screenshot) {
+      if (effectiveScreenshot) {
         console.warn("Veo endpoint unreachable, rendering with Screen Studio engine:", netErr);
-        return renderScreenshotToVideo(screenshot, {
+        return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -129,9 +185,9 @@ export class TourService {
 
     if (!initRes.ok) {
       const err = await initRes.json().catch(() => ({}));
-      if (screenshot) {
+      if (effectiveScreenshot) {
         console.warn("Veo video generation failed, falling back to Screen Studio engine:", err.error);
-        return renderScreenshotToVideo(screenshot, {
+        return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -145,8 +201,8 @@ export class TourService {
 
     const { operationName } = await initRes.json();
     if (!operationName) {
-      if (screenshot) {
-        return renderScreenshotToVideo(screenshot, {
+      if (effectiveScreenshot) {
+        return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -176,9 +232,9 @@ export class TourService {
       if (statusRes.ok) {
         const statusData = await statusRes.json();
         if (statusData.error) {
-          if (screenshot) {
+          if (effectiveScreenshot) {
             console.warn("Veo polling reported error, falling back to Screen Studio:", statusData.error);
-            return renderScreenshotToVideo(screenshot, {
+            return renderScreenshotToVideo(effectiveScreenshot, {
               duration: options?.duration || scene.duration,
               sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
               sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -197,9 +253,9 @@ export class TourService {
     }
 
     if (!isDone) {
-      if (screenshot) {
+      if (effectiveScreenshot) {
         console.warn("Veo generation timed out, falling back to Screen Studio:");
-        return renderScreenshotToVideo(screenshot, {
+        return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -221,9 +277,9 @@ export class TourService {
 
     if (!downloadRes.ok) {
       const errData = await downloadRes.json().catch(() => ({}));
-      if (screenshot) {
+      if (effectiveScreenshot) {
         console.warn("Veo download failed, falling back to Screen Studio:", errData.error);
-        return renderScreenshotToVideo(screenshot, {
+        return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
@@ -237,8 +293,8 @@ export class TourService {
 
     const videoBlob = await downloadRes.blob();
     if (!videoBlob || videoBlob.size === 0 || videoBlob.type === "application/json") {
-      if (screenshot) {
-        return renderScreenshotToVideo(screenshot, {
+      if (effectiveScreenshot) {
+        return renderScreenshotToVideo(effectiveScreenshot, {
           duration: options?.duration || scene.duration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,

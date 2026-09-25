@@ -149,60 +149,22 @@ export default function App() {
 
   const checkKeyStatus = async () => {
     try {
-      if ((window as any).aistudio && typeof (window as any).aistudio.hasSelectedApiKey === 'function') {
-        const selected = await (window as any).aistudio.hasSelectedApiKey();
-        if (selected) {
-          setHasKey(true);
-          return;
-        }
-      }
       const backendHasKey = await tourService.checkBackendKey();
-      if (backendHasKey) {
-        setHasKey(true);
-        return;
-      }
-      const clientKey = (window as any).process?.env?.API_KEY || process.env.API_KEY || process.env.GEMINI_API_KEY;
-      if (clientKey && clientKey !== 'RENDER_API_KEY_PLACEHOLDER' && clientKey !== 'UNUSED_PLACEHOLDER_FOR_API_KEY' && clientKey.trim() !== '') {
-        setHasKey(true);
-      } else {
-        setHasKey(false);
-      }
+      setHasKey(backendHasKey);
     } catch (e) {
-      setHasKey(false);
-    }
-  };
-
-  const handleKeySelection = async () => {
-    if ((window as any).aistudio && typeof (window as any).aistudio.openSelectKey === 'function') {
-      try {
-        await (window as any).aistudio.openSelectKey();
-        setHasKey(true); 
-        setError(null);
-        return;
-      } catch (e) {
-        console.error("Failed to open key selection", e);
-      }
-    }
-    const customKey = prompt("Enter your Google Gemini API Key:");
-    if (customKey && customKey.trim()) {
-      (window as any).process = (window as any).process || { env: {} };
-      (window as any).process.env = (window as any).process.env || {};
-      (window as any).process.env.API_KEY = customKey.trim();
       setHasKey(true);
-      setError(null);
     }
   };
 
   const handleGlobalError = async (e: any) => {
     const msg = e.message || "";
     if (msg.includes("Requested entity was not found") || msg.includes("API_KEY") || msg.includes("401") || msg.includes("403")) {
-      setError("API Key invalid or missing. Please check your credentials.");
+      setError("Gemini API Key missing or unauthorized on the server. Please verify your API_KEY environment variable in Render.com.");
       setHasKey(false);
       return true;
     }
     if (msg.includes("500") || msg.includes("INTERNAL")) {
-      setError("Internal error (500). Please re-select your key.");
-      setHasKey(false); 
+      setError("Internal server error during generation. Please try again.");
       return true;
     }
     setError(msg || "An unexpected error occurred.");
@@ -1090,8 +1052,12 @@ export default function App() {
 
   const startGeneration = async () => {
     if (!isApiReady) {
-      await handleKeySelection();
-      return;
+      const isReady = await tourService.checkBackendKey();
+      if (!isReady) {
+        setError("Gemini API key is not configured on the server. Please verify the API_KEY environment variable in Render.com.");
+        return;
+      }
+      setHasKey(true);
     }
     if (!input.name || !input.description) {
       setError("Please provide at least a name and description.");
@@ -1179,8 +1145,12 @@ export default function App() {
 
   const processEditorClips = async () => {
     if (!isApiReady) {
-      setError("AI analysis requires an API Key.");
-      return;
+      const isReady = await tourService.checkBackendKey();
+      if (!isReady) {
+        setError("AI Engine is not connected. Please verify your server API_KEY configuration in Render.com.");
+        return;
+      }
+      setHasKey(true);
     }
     if (editorState.clips.length === 0) return;
     setEditorState(prev => ({ ...prev, isProcessing: true }));
@@ -1235,15 +1205,15 @@ export default function App() {
         <div className="w-20 h-20 bg-indigo-50 rounded-3xl flex items-center justify-center mx-auto mb-6">
           <KeyIcon className="w-10 h-10 text-indigo-500" />
         </div>
-        <h2 className="text-2xl font-bold text-slate-900 mb-3">API Key Required</h2>
+        <h2 className="text-2xl font-bold text-slate-900 mb-3">AI Engine Connection</h2>
         <p className="text-slate-500 mb-8 leading-relaxed text-sm">
-          Tour Creator uses high-end **Veo Video Models** and Gemini Pro which require a connected API Key for processing.
+          Tour Creator uses Gemini and Veo models on the server. Ensure the <strong>API_KEY</strong> environment variable is configured in Render.com.
         </p>
         <button 
-          onClick={handleKeySelection} 
+          onClick={checkKeyStatus} 
           className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-2xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group"
         >
-          Connect API Key <SparklesIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
+          Check Server Connection <SparklesIcon className="w-5 h-5 group-hover:rotate-12 transition-transform" />
         </button>
       </div>
     </div>
@@ -1370,15 +1340,16 @@ export default function App() {
 
           {/* API Key Status */}
           <button 
-            onClick={handleKeySelection} 
+            onClick={checkKeyStatus} 
+            title="Click to verify AI server connection"
             className={`hidden sm:flex items-center gap-2 text-xs font-bold py-2 px-3 rounded-xl border transition ${
               isApiReady 
                 ? 'bg-green-50 border-green-200 text-green-700' 
                 : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
-            <div className={`w-2 h-2 rounded-full ${isApiReady ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`} />
-            <span className="hidden lg:inline">{isApiReady ? 'Connected' : 'Connect Key'}</span>
+            <div className={`w-2 h-2 rounded-full ${isApiReady ? 'bg-green-500 animate-pulse' : 'bg-amber-500'}`} />
+            <span className="hidden lg:inline">{isApiReady ? 'AI Engine Linked' : 'Verify Connection'}</span>
           </button>
         </div>
       </nav>
