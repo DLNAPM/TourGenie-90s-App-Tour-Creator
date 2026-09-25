@@ -70,7 +70,7 @@ export const MasterVideoPlayer: React.FC<MasterVideoPlayerProps> = ({
   const sceneMarkers = useMemo(() => {
     let accumulated = 0;
     return clips.map((clip, idx) => {
-      const clipDuration = clip.duration && clip.duration > 0 ? clip.duration : 15;
+      const clipDuration = clip.duration && clip.duration > 0 ? clip.duration : 30;
       const start = accumulated;
       const end = start + clipDuration;
       accumulated = end;

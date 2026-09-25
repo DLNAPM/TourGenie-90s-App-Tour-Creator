@@ -574,7 +574,7 @@ export default function App() {
         const res = await fetch(scene.videoUrl);
         const blob = await res.blob();
         const file = new File([blob], `scene-${i + 1}.mp4`, { type: blob.type || 'video/mp4' });
-        const duration = await getVideoDuration(file).catch(() => scene.duration || 25);
+        const duration = await getVideoDuration(file).catch(() => scene.duration || 30);
         const screenshotIndex = scene.screenshotIndex !== undefined 
           ? scene.screenshotIndex 
           : (input.screenshots.length > 0 ? (i % input.screenshots.length) : undefined);
@@ -586,7 +586,7 @@ export default function App() {
           id: `scene-clip-${i}-${Date.now()}`,
           file,
           previewUrl: scene.videoUrl,
-          duration: duration || scene.duration || 25,
+          duration: duration || scene.duration || 30,
           status: 'ready',
           narration: scene.narration,
           audioUrl: scene.audioUrl,
@@ -658,7 +658,7 @@ export default function App() {
       id: item.id || `scene-clip-${idx}-${Date.now()}`,
       file: item.file,
       previewUrl: item.previewUrl,
-      duration: item.duration || 25,
+      duration: item.duration || 30,
       status: 'ready',
       narration: item.narration,
       audioUrl: item.audioUrl,
@@ -683,7 +683,7 @@ export default function App() {
       id: item.id || `scene-clip-${idx}-${Date.now()}`,
       file: item.file,
       previewUrl: item.previewUrl,
-      duration: item.duration || 25,
+      duration: item.duration || 30,
       status: 'ready',
       narration: item.narration,
       audioUrl: item.audioUrl,
@@ -710,7 +710,7 @@ export default function App() {
         id: clip.id,
         title: clip.title || `Scene ${idx + 1}`,
         previewUrl: clip.previewUrl,
-        duration: clip.duration,
+        duration: clip.duration || 30,
         narration: clip.narration || '',
         audioUrl: clip.audioUrl,
         screenshotUrl: clip.screenshotUrl || clip.previewUrl,
@@ -728,7 +728,7 @@ export default function App() {
         id: scene.id || `creator-scene-${idx}`,
         title: `Scene ${idx + 1}: ${scene.visualPrompt || scene.timestamp || ''}`,
         previewUrl: scene.videoUrl || screenshot || '',
-        duration: scene.duration || 25,
+        duration: scene.duration || 30,
         narration: scene.narration || '',
         audioUrl: scene.audioUrl,
         screenshotUrl: scene.screenshotUrl || scene.videoUrl,
@@ -1097,7 +1097,7 @@ export default function App() {
             engineMode: videoEngineMode,
             audioBase64: audioBase64,
             sceneIndex: i,
-            duration: updatedScenes[i].duration
+            duration: Math.max(30, updatedScenes[i].duration || 30)
           });
 
           updatedScenes[i].videoUrl = videoUrl;
@@ -1376,7 +1376,7 @@ export default function App() {
                 <div className="space-y-8">
                   <section>
                     <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Create a New Tour</h2>
-                    <p className="text-slate-500">Transform your app's complexity into a professional 30-90 second story.</p>
+                    <p className="text-slate-500">Generate a comprehensive 10-scene product walkthrough (at least 30 seconds per scene in 100% American English).</p>
                   </section>
                   <div className="space-y-6">
                     <div>
@@ -1391,12 +1391,12 @@ export default function App() {
                       <div className="flex items-center justify-between mb-2">
                         <label className="block text-sm font-semibold">Tour Script / Key Features</label>
                         <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                          Up to 30s per scene
+                          10 Scenes • ≥30s per scene
                         </span>
                       </div>
                       <textarea 
                         rows={4} 
-                        placeholder="Paste your script or key features here. Scene timings are expanded up to 30 seconds each to accommodate full feature explanations." 
+                        placeholder="Paste your script or key features here. Generates 10 comprehensive scenes, at least 30 seconds long each in standard American English." 
                         className="w-full bg-white border border-slate-200 rounded-xl py-3 px-4 focus:ring-2 focus:ring-indigo-500 outline-none transition" 
                         value={input.script} 
                         onChange={e => setInput({...input, script: e.target.value})} 
@@ -1410,7 +1410,7 @@ export default function App() {
                           <SparklesIcon className="w-4 h-4 text-indigo-600" /> Video Synthesis Engine
                         </label>
                         <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200 flex items-center gap-1">
-                          <ShieldCheckIcon className="w-3.5 h-3.5 text-green-600" /> 100% U.S. English Guaranteed
+                          <ShieldCheckIcon className="w-3.5 h-3.5 text-green-600" /> 100% American English Guaranteed
                         </span>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1445,14 +1445,14 @@ export default function App() {
                             {videoEngineMode === 'veo' && <CheckCircleIcon className="w-4 h-4 text-indigo-600" />}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                            Generative diffusion model via Google Veo (may hallucinate fictional screen frames).
+                            Generative diffusion model via Google Veo with strict American English constraints.
                           </p>
                         </button>
                       </div>
                     </div>
 
                     <button onClick={startGeneration} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-2 group">
-                      Generate Storyboard & Video <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                      Generate 10-Scene Storyboard & Videos <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                     </button>
                   </div>
                 </div>
@@ -1461,10 +1461,10 @@ export default function App() {
                     <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleScreenshotUpload} accept="image/*" />
                     <CloudArrowUpIcon className="w-12 h-12 text-indigo-500 mx-auto mb-3" />
                     <h3 className="text-lg font-bold text-slate-900">Upload Screenshots</h3>
-                    <p className="text-slate-500 text-sm max-w-sm mx-auto">Upload your app screenshots. TourGenie generates exactly one dedicated scene per screenshot (up to 30s each).</p>
+                    <p className="text-slate-500 text-sm max-w-sm mx-auto">Upload your app screenshots. TourGenie crafts 10 dedicated scenes (at least 30 seconds long each in standard American English).</p>
                     <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-[11px] font-bold text-indigo-700">
                       <SparklesIcon className="w-3.5 h-3.5 text-indigo-600" />
-                      1 Scene per Screenshot • Up to 30s per Scene
+                      10 Scenes • ≥30s per Scene • 100% American English
                     </div>
                   </div>
                   {input.screenshots.length > 0 && (
@@ -1474,7 +1474,7 @@ export default function App() {
                           {input.screenshots.length} {input.screenshots.length === 1 ? 'Screenshot' : 'Screenshots'} Uploaded
                         </span>
                         <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                          {input.screenshots.length} {input.screenshots.length === 1 ? 'Scene' : 'Scenes'} (up to 30s each)
+                          10 Scenes Planned (≥30s each)
                         </span>
                       </div>
                       <div className="grid grid-cols-3 gap-3">

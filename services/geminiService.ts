@@ -56,11 +56,11 @@ function createSceneFallbackCanvas(title: string, subtitle?: string): string {
 
     ctx.fillStyle = '#6366f1';
     ctx.beginPath();
-    ctx.roundRect(140, 180, 190, 36, 18);
+    ctx.roundRect(140, 180, 260, 36, 18);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px Inter, sans-serif';
-    ctx.fillText('FEATURE SHOWCASE', 156, 203);
+    ctx.font = 'bold 12px Inter, sans-serif';
+    ctx.fillText('AMERICAN ENGLISH • FEATURE TOUR', 156, 203);
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 42px Inter, sans-serif';
@@ -134,6 +134,7 @@ export class TourService {
       duration?: number;
     }
   ): Promise<string> {
+    const effectiveDuration = Math.max(30, options?.duration || scene.duration || 30);
     const engineMode = options?.engineMode || (screenshot ? 'studio' : 'veo');
     const effectiveScreenshot = screenshot || createSceneFallbackCanvas(scene.visualPrompt || scene.timestamp || 'Product Tour', scene.narration);
 
@@ -142,7 +143,7 @@ export class TourService {
     if (screenshot && engineMode === 'studio') {
       try {
         const videoUrl = await renderScreenshotToVideo(screenshot, {
-          duration: options?.duration || scene.duration,
+          duration: effectiveDuration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
           narration: scene.narration,
@@ -172,7 +173,7 @@ export class TourService {
       if (effectiveScreenshot) {
         console.warn("Veo endpoint unreachable, rendering with Screen Studio engine:", netErr);
         return renderScreenshotToVideo(effectiveScreenshot, {
-          duration: options?.duration || scene.duration,
+          duration: effectiveDuration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
           narration: scene.narration,
@@ -188,7 +189,7 @@ export class TourService {
       if (effectiveScreenshot) {
         console.warn("Veo video generation failed, falling back to Screen Studio engine:", err.error);
         return renderScreenshotToVideo(effectiveScreenshot, {
-          duration: options?.duration || scene.duration,
+          duration: effectiveDuration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
           narration: scene.narration,
@@ -203,7 +204,7 @@ export class TourService {
     if (!operationName) {
       if (effectiveScreenshot) {
         return renderScreenshotToVideo(effectiveScreenshot, {
-          duration: options?.duration || scene.duration,
+          duration: effectiveDuration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
           narration: scene.narration,
@@ -235,7 +236,7 @@ export class TourService {
           if (effectiveScreenshot) {
             console.warn("Veo polling reported error, falling back to Screen Studio:", statusData.error);
             return renderScreenshotToVideo(effectiveScreenshot, {
-              duration: options?.duration || scene.duration,
+              duration: effectiveDuration,
               sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
               sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
               narration: scene.narration,
@@ -256,7 +257,7 @@ export class TourService {
       if (effectiveScreenshot) {
         console.warn("Veo generation timed out, falling back to Screen Studio:");
         return renderScreenshotToVideo(effectiveScreenshot, {
-          duration: options?.duration || scene.duration,
+          duration: effectiveDuration,
           sceneIndex: options?.sceneIndex ?? (scene.screenshotIndex ?? 0),
           sceneTitle: scene.timestamp ? `SCENE • ${scene.timestamp}` : undefined,
           narration: scene.narration,

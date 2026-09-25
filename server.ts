@@ -119,41 +119,48 @@ async function startServer() {
       const ai = new GoogleGenAI({ apiKey });
       const { name, url, description, script, screenshotCount = 0 } = req.body;
       const hasScreenshots = screenshotCount > 0;
-      // When screenshots are provided, create exactly as many scenes as there are uploaded screenshots.
-      const targetSceneCount = hasScreenshots ? screenshotCount : 5;
+      // Requirement: Exactly 10 scenes, at least 30 seconds long each
+      const targetSceneCount = 10;
 
       const prompt = `
         Act as a professional software video tour director.
-        Create an exact ${targetSceneCount}-scene storyboard for the app tour video.
-        ${hasScreenshots ? `CRITICAL REQUIREMENT: Exactly ${targetSceneCount} scenes MUST be created. There are ${targetSceneCount} uploaded screenshots. You MUST create exactly ONE scene for each uploaded screenshot in sequence (Scene 1 matches Screenshot 1, Scene 2 matches Screenshot 2, etc.). Return an array with exactly ${targetSceneCount} items.` : `Create a ${targetSceneCount}-scene storyboard.`}
+        Create an exact 10-scene storyboard for a comprehensive 10-scene application tour video.
+        
+        CRITICAL REQUIREMENT - EXACTLY 10 SCENES:
+        You MUST generate an array with EXACTLY 10 scene objects (Scene 1 through Scene 10).
+        ${hasScreenshots ? `The user has provided ${screenshotCount} application screenshot(s). Map them sequentially across the 10 scenes (cyclically if fewer than 10).` : `Design 10 sequential walkthrough scenes covering the software's full lifecycle.`}
 
         App Name: ${name || "My App"}
         App URL: ${url || ""}
         Description: ${description || ""}
         Tour Script / Key Features: ${script || ""}
-        Screenshots Provided: ${hasScreenshots ? `${screenshotCount} real application screenshots provided in 100% U.S. English` : "None"}
+        Screenshots Provided: ${hasScreenshots ? `${screenshotCount} real application screenshot(s) in standard American English` : "None"}
 
-        CRITICAL TIMING & LENGTH REQUIREMENT:
-        - Timing of EACH scene must be up to 30-seconds (typically 15 to 30 seconds per scene, maximum 30 seconds) to thoroughly accommodate the length and depth of the Tour Script / Key Features provided by the user.
-        - For each scene, write an in-depth, engaging voiceover narration in fluent American English that thoroughly explains the key features and workflow shown in that screen. The narration should be substantial enough to speak naturally over up to 30 seconds (~40 to 75 spoken words per scene).
-        - In the "timestamp" field, provide sequential time ranges reflecting this timing (e.g. "0:00 - 0:25", "0:25 - 0:52", etc.), where each scene duration is between 15 and 30 seconds (maximum 30 seconds).
-        - In the "duration" field, provide the estimated duration in seconds (an integer between 15 and 30, maximum 30).
+        CRITICAL DURATION & TIMING REQUIREMENT - AT LEAST 30 SECONDS PER SCENE:
+        - The duration of EACH AND EVERY scene MUST BE AT LEAST 30 SECONDS (duration >= 30, e.g. 30 to 36 seconds per scene, NEVER less than 30 seconds).
+        - In the "duration" field for each scene, provide an integer of AT LEAST 30 (e.g. 30, 32, 35). NEVER return a number below 30.
+        - In the "timestamp" field, provide sequential time ranges where each scene is at least 30 seconds long (for example: "0:00 - 0:30", "0:30 - 1:00", "1:00 - 1:31", "1:31 - 2:02", "2:02 - 2:33", "2:33 - 3:04", "3:04 - 3:35", "3:35 - 4:05", "4:05 - 4:35", "4:35 - 5:05").
+        - The combined total duration of all 10 scenes will be at least 5 minutes (300+ seconds).
 
-        CRITICAL REQUIREMENT - 100% U.S. ENGLISH ONLY:
-        - Everything generated MUST be strictly in 100% fluent American English.
+        CRITICAL SCRIPT & NARRATION REQUIREMENT:
+        - For each scene, write an in-depth, rich, conversational voiceover narration in fluent standard American English that takes AT LEAST 30 SECONDS to speak naturally (~75 to 95 spoken words per scene).
+        - DO NOT write short one-liners. Provide comprehensive explanations of the workflow, benefits, features, metrics, and actions visible in that scene.
+
+        CRITICAL REQUIREMENT - 100% AMERICAN ENGLISH ONLY (NO FOREIGN LANGUAGE):
+        - All text, visual prompts, narrations, descriptions, and UI terms MUST be in standard American English (US English).
+        - Strictly NO foreign languages, NO non-English characters, NO Cyrillic or Asian glyphs, NO pseudo-Latin or nonsense words.
         - ${hasScreenshots 
-            ? `IMPORTANT: The user has provided real application screenshots in 100% U.S. English. In each "visualPrompt", describe ONLY 2D camera motions across that specific interface screencast (for example: "Smooth slow push-in zoom into the main dashboard metrics", "Gentle horizontal pan across the navigation items from left to right", "Smooth vertical glide down the detail view", "Slow steady zoom-out revealing the full interface layout"). DO NOT mention physical rooms, offices, gyms, smartphones, 3D devices, floating phones, or hand-held mockups. The video is a clean, direct 2D screen tour of the user's software.`
-            : `In each "visualPrompt", specify clean modern 2D software interface presentations with sleek motion graphics and crisp American English typography (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS').`
+            ? `In each "visualPrompt", describe ONLY smooth 2D camera motions across the 2D screencast (e.g. "Smooth slow push-in zoom into the dashboard analytics cards", "Gentle horizontal pan across the navigation items", "Smooth vertical glide down the data table", "Steady reveal of the full interface"). DO NOT mention physical rooms, offices, gyms, smartphones, 3D devices, or hand-held mockups. The video is a direct 2D screen tour in American English.`
+            : `In each "visualPrompt", describe sleek 2D software interface presentations with crisp American English typography (e.g. 'DASHBOARD', 'ANALYTICS', 'SETTINGS', 'ACTIVITY FEED').`
           }
-        - In each "narration", write natural, engaging voiceover script in 100% fluent American English that thoroughly covers the features shown.
 
-        For each scene, provide:
-        1. "timestamp": Sequential time range (e.g. "0:00 - 0:25", max 30s per scene)
-        2. "duration": Duration in seconds (integer between 15 and 30, max 30)
-        3. "visualPrompt": Describing 2D screencast camera movement across the interface in crisp focus.
-        4. "narration": Voiceover script in fluent U.S. English (~40-75 words, sized for up to 30 seconds of speech).
+        For each of the 10 scenes, provide:
+        1. "timestamp": Sequential time range (e.g. "0:00 - 0:30", each >= 30 seconds)
+        2. "duration": Duration in seconds (integer >= 30, e.g. 30, 32, 35)
+        3. "visualPrompt": Smooth 2D camera movement across the American English interface
+        4. "narration": Voiceover script in 100% fluent American English (~75-95 words, taking at least 30 seconds to speak)
 
-        Return as a JSON array of exactly ${targetSceneCount} objects.
+        Return as a JSON array of EXACTLY 10 objects.
       `;
 
       const response = await ai.models.generateContent({
@@ -181,15 +188,28 @@ async function startServer() {
       const parsed = JSON.parse(response.text || "[]");
       const baseScenes = Array.isArray(parsed) ? parsed : [];
 
-      // Ensure exact scene count matching targetSceneCount
+      const defaultNarrations = [
+        `Welcome to ${name || 'the platform'}, where modern workflows meet powerful productivity. In this opening scene, we introduce the core system architecture designed to streamline operations across your organization with ease, speed, and complete American English precision.`,
+        `Here on the main dashboard, users gain immediate access to real-time analytics, key performance metrics, and activity monitors. Notice the clean layout and intuitive navigation menus engineered to give you instant clarity from day one.`,
+        `Next, we explore the primary feature workspace. This interface empowers team members to create, edit, and organize projects with full control, robust search filters, and automated tag categorization built for seamless collaboration.`,
+        `Diving deeper into daily operations, this interactive view showcases the rapid execution engine. Whether tracking progress or updating records, every action is synchronized instantly with zero lag and full audit history.`,
+        `Let us take a close look at our advanced data management module. Users can filter high-volume records, configure custom data columns, and export comprehensive reports with a single click, keeping your stakeholders informed.`,
+        `Collaboration is at the heart of the experience. Here in the team settings panel, administrators can assign granular permissions, review user roles, and coordinate shared workspaces effortlessly across departments.`,
+        `In scene seven, we examine automated workflow triggers and notification channels. By automating repetitive tasks, your team saves valuable hours every week while maintaining consistent quality standards.`,
+        `Security and compliance remain paramount. This section highlights end-to-end data encryption, multi-factor authentication controls, and enterprise-grade privacy settings configured to protect your sensitive business assets.`,
+        `Here we demonstrate seamless integrations with leading external services and APIs. Connect your existing tools and synchronize data pipelines without friction, unifying your entire software ecosystem in one place.`,
+        `To conclude our tour, we review the summary dashboard and next steps. Getting started is fast and straightforward, providing your team with the tools needed to scale productivity with confidence and clarity.`
+      ];
+
+      // Ensure exact scene count matching targetSceneCount (10 scenes, each >= 30 seconds)
       const scenes: any[] = [];
       let currentOffsetSec = 0;
 
       for (let i = 0; i < targetSceneCount; i++) {
         const item = baseScenes[i] || {};
-        let sceneDuration = typeof item.duration === 'number' && item.duration > 0
-          ? Math.min(30, Math.max(10, Math.round(item.duration)))
-          : 25; // default 25s (up to 30s)
+        let sceneDuration = typeof item.duration === 'number' && item.duration >= 30
+          ? Math.round(item.duration)
+          : 30; // Guaranteed at least 30 seconds per scene
 
         const startSec = currentOffsetSec;
         const endSec = startSec + sceneDuration;
@@ -203,10 +223,10 @@ async function startServer() {
           id: `scene-${i}`,
           timestamp,
           duration: sceneDuration,
-          visualPrompt: item.visualPrompt || `Smooth 2D camera glide across interface screen ${i + 1}.`,
-          narration: item.narration || `Here in scene ${i + 1}, we explore key application features and productivity workflows designed to empower your team.`,
+          visualPrompt: item.visualPrompt || `Smooth 2D camera glide across American English interface screen ${i + 1}.`,
+          narration: item.narration || defaultNarrations[i] || `In scene ${i + 1}, we explore key application features and productivity workflows designed to empower your team in fluent American English.`,
           status: 'pending',
-          screenshotIndex: hasScreenshots ? i : undefined
+          screenshotIndex: hasScreenshots ? (i % screenshotCount) : undefined
         });
       }
 
@@ -246,12 +266,14 @@ async function startServer() {
         finalPrompt = [
           `Commercial 2D screencast animation of the application interface.`,
           `CAMERA MOTION: ${cleanMotion}`,
-          `DIRECTIVES: Flat 2D screencast video, steady smooth camera glide across the screen, razor-sharp focus on the original English text and UI elements, zero 3D perspective distortion.`
+          `DIRECTIVES: Flat 2D screencast video, steady smooth camera glide across the screen, razor-sharp focus on the original English text and UI elements, zero 3D perspective distortion.`,
+          `STRICT LANGUAGE REQUIREMENT: All words, labels, menus, buttons, and typography must be exclusively in 100% standard American English. Absolutely no foreign language, no non-English characters, no pseudo-foreign scripts or glyphs.`
         ].join(" ");
       } else {
         finalPrompt = [
           visualPrompt ? visualPrompt.trim() : "Cinematic digital interface showcase in motion.",
-          `Clean modern minimalist interface presentation with crisp typography in standard American English, smooth UI motion graphics, professional product demo.`
+          `Clean modern minimalist interface presentation with crisp typography in standard American English, smooth UI motion graphics, professional product demo.`,
+          `STRICT LANGUAGE REQUIREMENT: All on-screen words, headers, and UI elements must be strictly in 100% fluent American English. Absolutely no foreign languages, no foreign scripts, and no gibberish.`
         ].join(" ");
       }
 
@@ -441,10 +463,11 @@ async function startServer() {
       }
 
       let response;
+      const ttsInstruction = `Speak clearly, smoothly, and professionally in fluent standard American English with a natural American accent. Do not speak any foreign language words or foreign accents. Text: ${text}`;
       try {
         response = await ai.models.generateContent({
           model: "gemini-3.8-flash-lite-tts",
-          contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
+          contents: [{ parts: [{ text: ttsInstruction }] }],
           config: {
             responseModalities: [Modality.AUDIO],
             speechConfig: {
@@ -458,7 +481,7 @@ async function startServer() {
         try {
           response = await ai.models.generateContent({
             model: "gemini-3.8-flash-tts",
-            contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
+            contents: [{ parts: [{ text: ttsInstruction }] }],
             config: {
               responseModalities: [Modality.AUDIO],
               speechConfig: {
@@ -471,7 +494,7 @@ async function startServer() {
         } catch (e2) {
           response = await ai.models.generateContent({
             model: "gemini-2.5-flash-preview-tts",
-            contents: [{ parts: [{ text: `Say clearly and professionally in fluent American English: ${text}` }] }],
+            contents: [{ parts: [{ text: ttsInstruction }] }],
             config: {
               responseModalities: [Modality.AUDIO],
               speechConfig: {

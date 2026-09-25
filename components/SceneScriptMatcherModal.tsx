@@ -490,7 +490,7 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
                       
                       <div className="absolute top-2 left-2 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded text-[10px] font-bold text-white flex items-center gap-1">
                         <Clock className="w-3 h-3 text-indigo-400" />
-                        {Math.round(item.duration || 25)}s
+                        {Math.round(item.duration || 30)}s
                       </div>
 
                       {isVideo && previewVideoIdx !== idx && (

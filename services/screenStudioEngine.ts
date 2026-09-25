@@ -133,13 +133,13 @@ export async function renderScreenshotToVideo(
     }
   }
 
-  // Determine duration: match narration length + padding, or requested duration, capped at at most 30 seconds
+  // Determine duration: MUST be at least 30 seconds long per scene as requested
+  const minSceneDuration = 30;
   const neededAudioDuration = audioDuration > 0 ? Math.ceil(audioDuration + 0.6) : 0;
   const requestedDuration = options.duration 
-    ? Math.max(options.duration, neededAudioDuration) 
-    : (neededAudioDuration > 0 ? neededAudioDuration : 25);
-  // Cap each scene at at most 30-seconds to accommodate the length of Tour Script / Key Features
-  const duration = Math.min(30, Math.max(5, requestedDuration));
+    ? Math.max(options.duration, neededAudioDuration, minSceneDuration) 
+    : Math.max(minSceneDuration, neededAudioDuration);
+  const duration = Math.max(minSceneDuration, requestedDuration);
 
   const totalFrames = Math.max(30, Math.floor(duration * fps));
 
@@ -449,12 +449,17 @@ function drawSceneFrame(
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  // Lower-Third Scene Label (100% U.S. English typography, vector crisp)
+  // Lower-Third Scene Label (100% American English typography, vector crisp)
   const defaultTitles = [
     'OVERVIEW & METRICS',
     'KEY FEATURES & WORKFLOW',
     'DEEP DIVE & DATA EXPLORER',
-    'INTERACTIVE ACTION & DETAILS',
+    'INTERACTIVE TOOLS & ACTIONS',
+    'ADVANCED DATA MANAGEMENT',
+    'TEAM COLLABORATION & ROLES',
+    'AUTOMATION & PRODUCTIVITY',
+    'SECURITY & PRIVACY CONTROLS',
+    'INTEGRATIONS & ECOSYSTEM',
     'SYSTEM SUMMARY & NEXT STEPS'
   ];
   const labelTitle = sceneTitle || `SCENE ${sceneIdx + 1} • ${defaultTitles[sceneIdx % defaultTitles.length]}`;
@@ -469,8 +474,8 @@ function drawSceneFrame(
   const badgeW = textWidth + 36;
 
   // Frosted dark pill background
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
   ctx.lineWidth = 1;
   roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 17);
   ctx.fill();
@@ -482,9 +487,46 @@ function drawSceneFrame(
   ctx.fillStyle = '#10b981';
   ctx.fill();
 
-  // U.S. English Label Text
+  // American English Label Text
   ctx.fillStyle = '#ffffff';
   ctx.fillText(labelTitle, badgeX + 28, badgeY + badgeH / 2 + 4.5);
+
+  // Synced American English Subtitle Captions if narration is provided
+  if (narration && narration.trim().length > 0) {
+    // Split into sentences or chunks for clean display
+    const sentences = narration.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [narration];
+    const cleanSentences = sentences.map(s => s.trim()).filter(Boolean);
+    if (cleanSentences.length > 0) {
+      const activeIdx = Math.min(
+        cleanSentences.length - 1,
+        Math.floor(progress * cleanSentences.length)
+      );
+      const activeSubtitle = cleanSentences[activeIdx];
+      if (activeSubtitle) {
+        ctx.font = '500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        const subWidth = Math.min(canvasWidth - 300, ctx.measureText(activeSubtitle).width + 32);
+        const subX = (canvasWidth - subWidth) / 2;
+        const subY = canvasHeight - 64;
+
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.strokeStyle = 'rgba(99, 102, 241, 0.3)';
+        ctx.lineWidth = 1;
+        roundRect(ctx, subX, subY, subWidth, badgeH, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.textAlign = 'center';
+        // Truncate cleanly if too long
+        let displaySub = activeSubtitle;
+        while (ctx.measureText(displaySub).width > subWidth - 24 && displaySub.length > 10) {
+          displaySub = displaySub.slice(0, -4) + '...';
+        }
+        ctx.fillText(displaySub, canvasWidth / 2, subY + badgeH / 2 + 4.5);
+        ctx.textAlign = 'left';
+      }
+    }
+  }
 
   // Subtle progress line at very bottom edge
   ctx.fillStyle = 'rgba(99, 102, 241, 0.85)';
