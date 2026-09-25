@@ -2,6 +2,8 @@
 // Pixel-Perfect Screen Studio Video Engine for TourGenie
 // Guarantees 100% U.S. English fidelity with ZERO diffusion hallucinations or foreign glyphs
 
+import { cleanNarrationText } from "../types";
+
 export interface RenderOptions {
   duration?: number; // seconds
   motionStyle?: 'push-in' | 'pan-horizontal' | 'pan-vertical' | 'spotlight' | 'pull-out' | 'auto';
@@ -496,9 +498,10 @@ function drawSceneFrame(
   ctx.fillText(labelTitle, badgeX + 28, badgeY + badgeH / 2 + 4.5);
 
   // Synced American English Subtitle Captions if narration is provided
-  if (narration && narration.trim().length > 0) {
+  const cleanedNarration = cleanNarrationText(narration);
+  if (cleanedNarration && cleanedNarration.length > 0) {
     // Split into sentences or chunks for clean display
-    const sentences = narration.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [narration];
+    const sentences = cleanedNarration.match(/[^.!?]+[.!?]+|\s*[^.!?]+$/g) || [cleanedNarration];
     const cleanSentences = sentences.map(s => s.trim()).filter(Boolean);
     if (cleanSentences.length > 0) {
       const activeIdx = Math.min(

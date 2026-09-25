@@ -24,6 +24,7 @@ import {
   Wand2
 } from 'lucide-react';
 import { pcmBase64ToWavBlob } from '../services/screenStudioEngine';
+import { cleanNarrationText } from '../types';
 
 export interface SceneMatchItem {
   id: string;
@@ -83,6 +84,7 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
     if (isOpen && initialScenes) {
       setItems(initialScenes.map(s => ({ 
         ...s, 
+        narration: cleanNarrationText(s.narration),
         duration: Math.max(30, s.duration || 30),
         useVoiceover: s.useVoiceover !== false,
         narrationStartOffset: Math.max(0, Number(s.narrationStartOffset) || 0),
@@ -191,8 +193,9 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
     setGeneratingAudioIdx(idx);
     setErrorMessage(null);
     try {
-      const audioBase64 = await onGenerateVoiceover(item.narration);
-      setItems(prev => prev.map((it, i) => i === idx ? { ...it, audioUrl: audioBase64, isAudioDirty: false } : it));
+      const cleanScript = cleanNarrationText(item.narration);
+      const audioBase64 = await onGenerateVoiceover(cleanScript);
+      setItems(prev => prev.map((it, i) => i === idx ? { ...it, narration: cleanScript, audioUrl: audioBase64, isAudioDirty: false } : it));
     } catch (err: any) {
       setErrorMessage(`Failed to synthesize voiceover for Scene ${idx + 1}: ${err.message}`);
     } finally {
@@ -209,9 +212,11 @@ export const SceneScriptMatcherModal: React.FC<SceneScriptMatcherModalProps> = (
     const updated = [...items];
     try {
       for (let i = 0; i < updated.length; i++) {
-        if (updated[i].narration.trim() && (updated[i].isAudioDirty || !updated[i].audioUrl)) {
+        const cleanScript = cleanNarrationText(updated[i].narration);
+        if (cleanScript && (updated[i].isAudioDirty || !updated[i].audioUrl)) {
           setGeneratingAudioIdx(i);
-          const audioBase64 = await onGenerateVoiceover(updated[i].narration);
+          const audioBase64 = await onGenerateVoiceover(cleanScript);
+          updated[i].narration = cleanScript;
           updated[i].audioUrl = audioBase64;
           updated[i].isAudioDirty = false;
           setItems([...updated]);

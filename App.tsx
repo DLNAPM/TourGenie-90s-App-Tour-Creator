@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { AppInput, Scene, GenerationState, EditorClip, EditorState } from './types';
+import { AppInput, Scene, GenerationState, EditorClip, EditorState, cleanNarrationText } from './types';
 import { TourService } from './services/geminiService';
 import { pcmBase64ToWavBlob, stitchClipsClientSide } from './services/screenStudioEngine';
 import { User, onAuthStateChanged } from 'firebase/auth';
@@ -189,7 +189,7 @@ export default function App() {
           order: idx,
           title: c.title || c.analysis || matchingScene?.visualPrompt || `Slide ${idx + 1}`,
           duration: Math.max(30, c.duration || matchingScene?.duration || 30),
-          narration: c.narration || matchingScene?.narration || '',
+          narration: cleanNarrationText(c.narration || matchingScene?.narration || ''),
           analysis: c.analysis || c.narration || '',
           cameraMotion: c.cameraMotion || matchingScene?.visualPrompt || 'Slow Zoom In',
           resolution: '1080p Full HD',
@@ -217,7 +217,7 @@ export default function App() {
           order: idx,
           title: s.visualPrompt || `Slide ${idx + 1}`,
           duration: Math.max(30, s.duration || 30),
-          narration: s.narration || '',
+          narration: cleanNarrationText(s.narration || ''),
           analysis: s.narration || '',
           cameraMotion: s.visualPrompt || 'Slow Zoom In',
           resolution: '1080p Full HD',
@@ -377,8 +377,8 @@ export default function App() {
           duration: Math.max(30, s.duration || 30),
           status: 'ready',
           title: s.visualPrompt || `Slide ${index + 1}`,
-          narration: s.narration || '',
-          analysis: s.visualPrompt || s.narration || '',
+          narration: cleanNarrationText(s.narration || ''),
+          analysis: s.visualPrompt || cleanNarrationText(s.narration || '') || '',
           previewUrl: s.videoUrl || shot || '',
           videoUrl: s.videoUrl || '',
           screenshotUrl: shot,
@@ -414,7 +414,7 @@ export default function App() {
           timestamp: s.timestamp || `0:${(index * 30).toString().padStart(2, '0')}`,
           duration: Math.max(30, s.duration || 30),
           visualPrompt: s.visualPrompt || `Slide ${index + 1}`,
-          narration: s.narration || '',
+          narration: cleanNarrationText(s.narration || ''),
           videoUrl: s.videoUrl || shot || '',
           audioUrl: s.audioUrl || '',
           status: (s.status as any) || 'completed',
@@ -430,7 +430,7 @@ export default function App() {
         timestamp: `0:${(index * 30).toString().padStart(2, '0')}`,
         duration: Math.max(30, c.duration || 30),
         visualPrompt: c.title || c.analysis || `Slide ${index + 1}`,
-        narration: c.narration || '',
+        narration: cleanNarrationText(c.narration || ''),
         videoUrl: c.videoUrl || (c.previewUrl?.startsWith('data:video') || c.previewUrl?.endsWith('.mp4') ? c.previewUrl : ''),
         audioUrl: c.audioUrl || '',
         status: 'completed',
@@ -519,10 +519,11 @@ export default function App() {
   // --- Audio Helpers ---
   const playAudioPreview = async (audioBase64?: string, narrationText?: string, onGenerated?: (audio: string) => void) => {
     let audio = audioBase64;
-    if (!audio && narrationText?.trim()) {
+    const cleanScript = cleanNarrationText(narrationText);
+    if (!audio && cleanScript) {
       try {
         setQuickSaveFeedback("Generating voiceover audio...");
-        audio = await tourService.generateNarration(narrationText);
+        audio = await tourService.generateNarration(cleanScript);
         if (onGenerated && audio) {
           onGenerated(audio);
         }
@@ -548,10 +549,11 @@ export default function App() {
 
   const downloadAudio = async (audioBase64?: string, sceneIndex: number = 0, narrationText?: string) => {
     let audio = audioBase64;
-    if (!audio && narrationText?.trim()) {
+    const cleanScript = cleanNarrationText(narrationText);
+    if (!audio && cleanScript) {
       try {
         setQuickSaveFeedback("Generating audio file...");
-        audio = await tourService.generateNarration(narrationText);
+        audio = await tourService.generateNarration(cleanScript);
         setTimeout(() => setQuickSaveFeedback(null), 1500);
       } catch (synthErr) {
         console.warn("Could not generate audio on the fly:", synthErr);
@@ -600,7 +602,7 @@ export default function App() {
           previewUrl: scene.videoUrl,
           duration: Math.max(30, duration || scene.duration || 30),
           status: 'ready',
-          narration: scene.narration,
+          narration: cleanNarrationText(scene.narration),
           audioUrl: scene.audioUrl,
           title: `Scene ${i + 1}: ${scene.visualPrompt || scene.timestamp || ''}`,
           screenshotUrl: scene.screenshotUrl || scene.videoUrl,
@@ -729,7 +731,7 @@ export default function App() {
         title: clip.title || `Scene ${idx + 1}`,
         previewUrl: clip.previewUrl,
         duration: Math.max(30, clip.duration || 30),
-        narration: clip.narration || '',
+        narration: cleanNarrationText(clip.narration || ''),
         audioUrl: clip.audioUrl,
         screenshotUrl: clip.screenshotUrl || clip.previewUrl,
         rawScreenshot: clip.rawScreenshot,
@@ -749,7 +751,7 @@ export default function App() {
         title: `Scene ${idx + 1}: ${scene.visualPrompt || scene.timestamp || ''}`,
         previewUrl: scene.videoUrl || screenshot || '',
         duration: Math.max(30, scene.duration || 30),
-        narration: scene.narration || '',
+        narration: cleanNarrationText(scene.narration || ''),
         audioUrl: scene.audioUrl,
         screenshotUrl: scene.screenshotUrl || scene.videoUrl,
         rawScreenshot: screenshot,
@@ -776,6 +778,8 @@ export default function App() {
     setState(prev => ({ ...prev, scenes: updatedScenes }));
 
     try {
+      const cleanScript = cleanNarrationText(scene.narration);
+      scene.narration = cleanScript;
       const videoUrl = await tourService.generateSceneVideo(scene, screenshot, {
         engineMode: videoEngineMode,
         audioBase64: scene.audioUrl,
@@ -827,7 +831,7 @@ export default function App() {
             if (shot) {
               setRenderStage(`Generating Screen Studio animation for Scene ${i + 1}...`);
               videoUrl = await tourService.generateSceneVideo(
-                { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
+                { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: cleanNarrationText(clip.narration || ''), status: 'completed' },
                 shot,
                 { duration: Math.max(30, clip.duration || 30), audioBase64: clip.audioUrl, sceneIndex: i, narrationStartOffset: clip.narrationStartOffset || 0 }
               );
@@ -849,7 +853,7 @@ export default function App() {
               if (shot) {
                 setRenderStage(`Converting screenshot to HD video for Scene ${i + 1}...`);
                 videoUrl = await tourService.generateSceneVideo(
-                  { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: clip.narration || '', status: 'completed' },
+                  { id: clip.id, timestamp: '', visualPrompt: clip.title || '', narration: cleanNarrationText(clip.narration || ''), status: 'completed' },
                   shot,
                   { duration: Math.max(30, clip.duration || 30), audioBase64: clip.audioUrl, sceneIndex: i, narrationStartOffset: clip.narrationStartOffset || 0 }
                 );
@@ -1131,8 +1135,10 @@ export default function App() {
           
           // 1. Generate Voiceover Narration via Gemini TTS
           let audioBase64: string | undefined = undefined;
+          const cleanScript = cleanNarrationText(updatedScenes[i].narration);
+          updatedScenes[i].narration = cleanScript;
           try {
-            audioBase64 = await tourService.generateNarration(updatedScenes[i].narration);
+            audioBase64 = await tourService.generateNarration(cleanScript);
           } catch (audioErr) {
             console.warn("Narration TTS warning for scene " + i, audioErr);
           }

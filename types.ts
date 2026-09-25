@@ -84,3 +84,17 @@ export interface EditorState {
     tags: string[];
   };
 }
+
+/**
+ * Strips prompt instructions or template prefixes so the voiceover narrator
+ * speaks strictly the intended scene script text and never prompt meta-instructions.
+ */
+export function cleanNarrationText(t?: string | null): string {
+  if (!t) return "";
+  let res = String(t).trim();
+  // Strip out "Speak clearly... accents[,.] (Text[:])?" prefix
+  res = res.replace(/^[ \t\r\n]*Speak clearly[\s\S]*?(?:foreign accents?|American accent)[ \t\r\n]*[\.,]?[ \t\r\n]*(?:Text:?[ \t\r\n]*)?/i, "");
+  res = res.replace(/^[ \t\r\n]*Do not speak[\s\S]*?(?:foreign accents?|American accent)[ \t\r\n]*[\.,]?[ \t\r\n]*(?:Text:?[ \t\r\n]*)?/i, "");
+  res = res.replace(/^[ \t\r\n]*Text:[ \t\r\n]*/i, "");
+  return res.trim();
+}

@@ -25,6 +25,15 @@ function getApiKey(req: express.Request): string {
   return '';
 }
 
+function cleanNarrationText(t?: string | null): string {
+  if (!t) return "";
+  let res = String(t).trim();
+  res = res.replace(/^[ \t\r\n]*Speak clearly[\s\S]*?(?:foreign accents?|American accent)[ \t\r\n]*[\.,]?[ \t\r\n]*(?:Text:?[ \t\r\n]*)?/i, "");
+  res = res.replace(/^[ \t\r\n]*Do not speak[\s\S]*?(?:foreign accents?|American accent)[ \t\r\n]*[\.,]?[ \t\r\n]*(?:Text:?[ \t\r\n]*)?/i, "");
+  res = res.replace(/^[ \t\r\n]*Text:[ \t\r\n]*/i, "");
+  return res.trim();
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -234,7 +243,7 @@ async function startServer() {
           timestamp,
           duration: sceneDuration,
           visualPrompt: item.visualPrompt || `Smooth 2D camera glide across American English interface screen ${i + 1}.`,
-          narration: item.narration || defaultNarrations[i] || `In scene ${i + 1}, we explore key application features and productivity workflows designed to empower your team in fluent American English.`,
+          narration: cleanNarrationText(item.narration) || defaultNarrations[i] || `In scene ${i + 1}, we explore key application features and productivity workflows designed to empower your team in fluent American English.`,
           status: 'pending',
           screenshotIndex: hasScreenshots ? (i % screenshotCount) : undefined
         });
@@ -585,17 +594,17 @@ async function startServer() {
       }
       const ai = new GoogleGenAI({ apiKey });
       const { text } = req.body;
+      const scriptText = cleanNarrationText(text);
 
-      if (!text) {
+      if (!scriptText) {
         return res.status(400).json({ error: "Text is required for narration" });
       }
 
       let response;
-      const ttsInstruction = `Speak clearly, smoothly, and professionally in fluent standard American English with a natural American accent. Do not speak any foreign language words or foreign accents. Text: ${text}`;
       try {
         response = await ai.models.generateContent({
           model: "gemini-3.8-flash-lite-tts",
-          contents: [{ parts: [{ text: ttsInstruction }] }],
+          contents: [{ parts: [{ text: scriptText }] }],
           config: {
             responseModalities: [Modality.AUDIO],
             speechConfig: {
@@ -609,7 +618,7 @@ async function startServer() {
         try {
           response = await ai.models.generateContent({
             model: "gemini-3.8-flash-tts",
-            contents: [{ parts: [{ text: ttsInstruction }] }],
+            contents: [{ parts: [{ text: scriptText }] }],
             config: {
               responseModalities: [Modality.AUDIO],
               speechConfig: {
@@ -622,7 +631,7 @@ async function startServer() {
         } catch (e2) {
           response = await ai.models.generateContent({
             model: "gemini-2.5-flash-preview-tts",
-            contents: [{ parts: [{ text: ttsInstruction }] }],
+            contents: [{ parts: [{ text: scriptText }] }],
             config: {
               responseModalities: [Modality.AUDIO],
               speechConfig: {
