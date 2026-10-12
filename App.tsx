@@ -1493,11 +1493,11 @@ export default function App() {
                           }`}
                         >
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-slate-900">Veo AI Diffusion</span>
+                            <span className="text-xs font-bold text-slate-900">Gemini Omni & Veo</span>
                             {videoEngineMode === 'veo' && <CheckCircleIcon className="w-4 h-4 text-indigo-600" />}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                            Google Veo generative model, auto-looped & extended to 30s+ to fit full tour scripts.
+                            Gemini Omni 1.1 Flash generative model, auto-looped & extended to 30s+ to fit full tour scripts.
                           </p>
                         </button>
                       </div>
@@ -1793,7 +1793,7 @@ export default function App() {
                   <ShieldCheckIcon className="w-4 h-4 text-indigo-600" />
                   {videoEngineMode === 'studio'
                     ? 'Screen Studio Engine: Animating screenshot with 100% U.S. English text fidelity'
-                    : 'Veo Engine: Synthesizing generative video clip'}
+                    : 'Gemini Omni Engine: Synthesizing generative video clip'}
                 </div>
               </div>
             )

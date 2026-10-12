@@ -309,17 +309,17 @@ async function startServer() {
 
       let operation: any;
       try {
-        // Prefer flagship veo-3.1-generate-preview for superior fidelity and crisp text
+        // Use Gemini Omni 1.1 Flash for superior fidelity, motion, and UI text preservation
         operation = await ai.models.generateVideos({
-          model: 'veo-3.1-generate-preview',
+          model: 'gemini-omni-1.1-flash',
           prompt: finalPrompt,
           config,
           ...(payloadImage ? { image: payloadImage } : {})
         });
       } catch (tierErr: any) {
-        console.warn("veo-3.1-generate-preview fallback to lite:", tierErr?.message);
+        console.warn("gemini-omni-1.1-flash generation fallback:", tierErr?.message);
         operation = await ai.models.generateVideos({
-          model: 'veo-3.1-lite-generate-preview',
+          model: 'gemini-omni-1.1-flash',
           prompt: finalPrompt,
           config,
           ...(payloadImage ? { image: payloadImage } : {})
@@ -490,7 +490,7 @@ async function startServer() {
 
       const uri = videoObj?.uri;
       if (!uri) {
-        return res.status(404).json({ error: "No video download URI found in completed Veo operation" });
+        return res.status(404).json({ error: "No video download URI found in completed Gemini Omni operation" });
       }
 
       // 2. Fetch using official Gemini API pattern (direct fetch with x-goog-api-key)
@@ -545,9 +545,9 @@ async function startServer() {
       }
 
       if (!videoRes || !videoRes.ok) {
-        console.error("Google Veo video media download failed:", videoRes?.status, lastErrText);
+        console.error("Gemini Omni video media download failed:", videoRes?.status, lastErrText);
         return res.status(videoRes?.status || 502).json({
-          error: `Google Veo video download failed (${videoRes?.status || 502}): ${lastErrText || "Unable to retrieve video stream from Google servers."}`
+          error: `Gemini Omni video download failed (${videoRes?.status || 502}): ${lastErrText || "Unable to retrieve video stream from Google servers."}`
         });
       }
 
